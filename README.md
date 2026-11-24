@@ -27,8 +27,8 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │   ├── api.py        # FetchRequest and DataSourceFetcher protocol
 │   ├── http_client.py# JSON HTTP client with retries (httpx + tenacity)
 │   ├── utils.py      # Window validation, resampling, local Parquet loading
-│   └── fingrid_wind/ # Fingrid client + wind power fetcher (dataset 75)
-│       └── data/     # Committed 1-day, 15-minute Parquet snapshot for offline runs
+│   └── fingrid/      # Fingrid client, shared series fetcher, per-dataset fetchers
+│       └── data/     # Committed 1-day Parquet snapshots for offline runs
 ├── tests/            # Offline unit tests and live API integration tests
 ├── configs/          # (planned) retail contract definitions & household load profiles
 ├── data/             # (planned) raw and processed hourly datasets (git-ignored)
@@ -80,11 +80,11 @@ uv run pytest tests/test_fingrid_wind_fetcher.py -q
 uv run pytest tests/test_fingrid_wind_fetcher.py::test_fetch_from_local_reads_bundled_sample
 ```
 
-Unit tests never touch the network: fetcher tests read the committed snapshot at `datasets/fingrid_wind/data/fingrid_wind_sample.parquet` (2024-03-01, 96 quarter-hour samples), and client tests serve scripted responses through `httpx.MockTransport`. Only the integration tests hit the real API (a handful of requests, with automatic 429 retry/backoff), so avoid running them in tight loops against the free-tier quota.
+Unit tests never touch the network: fetcher tests read the committed snapshots under `datasets/fingrid/data/` (`wind_sample.parquet` with 96 quarter-hour samples and `wind_capacity_sample.parquet` with 24 hourly samples, both for 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. Only the integration tests hit the real API (a handful of requests, with automatic 429 retry/backoff), so avoid running them in tight loops against the free-tier quota.
 
 ### 4. Fetch data from a specific fetcher
 
-Each dataset has a fetcher under `datasets/<source>/`. Today there is one: `FingridWindFetcher` (Fingrid dataset 75, wind generation in MW).
+Each dataset has a fetcher under `datasets/<source>/`. Today there are two Fingrid wind fetchers: `FingridWindFetcher` (dataset 75, wind generation in MW) and `FingridWindCapacityFetcher` (dataset 268, installed wind capacity in MW). Both share the same constructor and request API; swap the class name in the snippet below.
 
 ```bash
 uv run python - <<'PY'
@@ -116,12 +116,12 @@ Notes:
 - Fingrid serves 15-minute samples after June 2023; `resolution="1h"` returns hourly means, `resolution="15min"` leaves the raw cadence.
 - Multi-year ranges are paginated automatically and retried on Fingrid rate limits.
 - `fetch` always calls the remote API. `fetch_from_local` returns data from the bundled snapshot when it exists and falls back to `fetch` otherwise, so the same request works offline.
-- The bundled snapshot lives at `datasets/fingrid_wind/data/fingrid_wind_sample.parquet` (2024-03-01 only). Override it with `FingridWindFetcher(..., local_path="path/to/snapshot.parquet")` or disable it with `local_path=None`.
+- The bundled snapshots live at `datasets/fingrid/data/wind_sample.parquet` (generation) and `wind_capacity_sample.parquet` (capacity), both covering 2024-03-01 only. Override either with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 - Output tables are built against `fetcher.expected_schema`, so `table.schema == fetcher.expected_schema` holds for every fetch.
 - To persist a table, write it to Parquet with pyarrow: `import pyarrow.parquet as pq; pq.write_table(table, "data/wind.parquet")` (create `data/` first).
 
 ### 5. Add a new fetcher
 
-1. Create `datasets/<source>/<source>_fetcher.py` with a class implementing `source_name`, `expected_schema`, `fetch`, and `fetch_from_local` (see the `DataSourceFetcher` protocol in `datasets/api.py`). Reuse `datasets/utils.py` for window validation, resolution lookup, bucket averaging, and local Parquet loading.
+1. For another Fingrid numeric series, subclass `FingridSeriesFetcher` and supply the dataset id, value column, schema, and local snapshot path (see `FingridWindCapacityFetcher`); it already implements `source_name`, `expected_schema`, `fetch`, and `fetch_from_local`. For other sources, create `datasets/<source>/<source>_fetcher.py` implementing the `DataSourceFetcher` protocol from `datasets/api.py`; reuse `datasets/utils.py` for window validation, resolution lookup, bucket averaging, and local Parquet loading.
 2. Export it from the subpackage's `__init__.py` and from `datasets/__init__.py`.
-3. Add an offline Parquet fixture for fetcher tests, serve scripted HTTP responses through `httpx.MockTransport` for client tests, and add a live test marked `@pytest.mark.integration` that skips when its credentials are missing (see `tests/test_fingrid_wind_fetcher.py`, `tests/test_fingrid_client.py`, and `tests/test_fingrid_wind_integration.py`).
+3. Add an offline Parquet fixture for fetcher tests, serve scripted HTTP responses through `httpx.MockTransport` for client tests, and add a live test marked `@pytest.mark.integration` that skips when its credentials are missing (see `tests/test_fingrid_wind_fetcher.py`, `tests/test_fingrid_wind_capacity_fetcher.py`, `tests/test_fingrid_client.py`, and the `tests/test_fingrid_*_integration.py` files).

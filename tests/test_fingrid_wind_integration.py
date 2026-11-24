@@ -10,7 +10,7 @@ import pytest
 from dotenv import load_dotenv
 
 from datasets import FetchRequest
-from datasets.fingrid_wind import FingridWindFetcher
+from datasets.fingrid import FingridWindFetcher
 
 load_dotenv()
 

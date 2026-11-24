@@ -23,7 +23,7 @@ class DataSourceFetcher(Protocol):
 
     @property
     def source_name(self) -> str:
-        """Unique identifier for logging and lineage (e.g., 'fingrid_wind')."""
+        """Unique identifier for logging and lineage (e.g., 'fingrid_75')."""
         ...
 
     @property

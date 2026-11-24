@@ -1,3 +1,5 @@
+"""Base fetcher for Fingrid datasets that expose one numeric time series."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -8,22 +10,16 @@ from typing import Self
 import pyarrow as pa
 
 from datasets.api import FetchRequest
-from datasets.fingrid_wind.fingrid_client import FingridClient
+from datasets.fingrid.client import FingridClient
 from datasets.utils import iter_local_samples, mean_by_bucket, resolution_step, utc_window
 
-DEFAULT_LOCAL_PATH = Path(__file__).parent / "data" / "fingrid_wind_sample.parquet"
 
-WIND_SCHEMA = pa.schema([
-    pa.field("timestamp_utc", pa.timestamp("us", tz="UTC"), nullable=False),
-    pa.field("wind_mw", pa.float32(), nullable=False),
-])
-
-
-class FingridWindFetcher:
+class FingridSeriesFetcher:
     """
-    Fetches Finnish wind power generation (MW) from Fingrid Open Data.
+    Fetches one Fingrid time series and shapes it into a typed Arrow table.
 
-    Samples are averaged into the bucket size given by ``FetchRequest.resolution``.
+    Subclasses supply the dataset id, the output value column, its schema, and
+    an optional local Parquet snapshot.
     """
 
     RESOLUTIONS: dict[str, timedelta] = {
@@ -35,14 +31,18 @@ class FingridWindFetcher:
     def __init__(
         self,
         api_key: str,
-        dataset_id: int = 75,
         *,
+        dataset_id: int,
+        value_column: str,
+        schema: pa.Schema,
+        local_path: str | Path | None,
         client: FingridClient | None = None,
-        local_path: str | Path | None = DEFAULT_LOCAL_PATH,
         timeout: float = 30.0,
         max_retries: int = 5,
     ) -> None:
         self._dataset_id = dataset_id
+        self._value_column = value_column
+        self._schema = schema
         self._client = client or FingridClient(
             api_key, timeout=timeout, max_retries=max_retries
         )
@@ -54,7 +54,7 @@ class FingridWindFetcher:
 
     @property
     def expected_schema(self) -> pa.Schema:
-        return WIND_SCHEMA
+        return self._schema
 
     def fetch(self, request: FetchRequest) -> pa.Table:
         start, end = utc_window(request.start_utc, request.end_utc)
@@ -69,7 +69,7 @@ class FingridWindFetcher:
         start, end = utc_window(request.start_utc, request.end_utc)
         local_path = self._local_path
         if local_path is not None and local_path.exists():
-            samples = iter_local_samples(local_path, value_column="wind_mw")
+            samples = iter_local_samples(local_path, value_column=self._value_column)
         else:
             samples = self._client.iter_samples(self._dataset_id, start, end)
         return self._build_table(
@@ -105,7 +105,7 @@ class FingridWindFetcher:
         return pa.Table.from_pydict(
             {
                 "timestamp_utc": [timestamp for timestamp, _ in rows],
-                "wind_mw": [value for _, value in rows],
+                self._value_column: [value for _, value in rows],
             },
-            schema=self.expected_schema,
+            schema=self._schema,
         )

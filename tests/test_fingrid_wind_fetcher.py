@@ -8,12 +8,12 @@ import pyarrow.parquet as pq
 import pytest
 
 from datasets import DataSourceFetcher, FetchRequest, FingridWindFetcher
-from datasets.fingrid_wind.fingrid_wind_fetcher import DEFAULT_LOCAL_PATH
+from datasets.fingrid.wind import DEFAULT_LOCAL_PATH
 
 API_KEY = "test-api-key"
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 END = datetime(2024, 1, 1, 2, 0, tzinfo=UTC)
-BUNDLED_SAMPLE = Path(__file__).parents[1] / "datasets" / "fingrid_wind" / "data" / "fingrid_wind_sample.parquet"
+BUNDLED_SAMPLE = Path(__file__).parents[1] / "datasets" / "fingrid" / "data" / "wind_sample.parquet"
 
 
 def write_local(
