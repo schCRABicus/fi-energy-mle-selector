@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 from collections import defaultdict
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -29,8 +30,10 @@ pytestmark = [
 
 
 @pytest.fixture(scope="module")
-def fetcher() -> FingridWindFetcher:
-    return FingridWindFetcher(os.environ["FINGRID_API_KEY"])
+def fetcher() -> Iterator[FingridWindFetcher]:
+    fetcher = FingridWindFetcher(os.environ["FINGRID_API_KEY"])
+    yield fetcher
+    fetcher.close()
 
 
 def test_live_hourly_fetch_returns_validated_dataset(fetcher):

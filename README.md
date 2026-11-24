@@ -25,7 +25,8 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 ```text
 ├── datasets/         # Data-source adapters: shared contract + per-source fetchers
 │   ├── api.py        # FetchRequest and DataSourceFetcher protocol
-│   └── fingrid_wind/ # Fingrid wind power fetcher (dataset 75)
+│   ├── http_client.py# JSON HTTP client with retries (httpx + tenacity)
+│   └── fingrid_wind/ # Fingrid client + wind power fetcher (dataset 75)
 ├── tests/            # Offline unit tests and live API integration tests
 ├── configs/          # (planned) retail contract definitions & household load profiles
 ├── data/             # (planned) raw and processed hourly datasets (git-ignored)
@@ -119,4 +120,4 @@ Notes:
 
 1. Create `datasets/<source>/<source>_fetcher.py` with a class implementing `source_name`, `expected_schema`, and `fetch` (see the `DataSourceFetcher` protocol in `datasets/api.py`).
 2. Export it from the subpackage's `__init__.py` and from `datasets/__init__.py`.
-3. Add offline unit tests that inject a fake `opener=`, plus a live test marked `@pytest.mark.integration` that skips when its credentials are missing (see `tests/test_fingrid_wind_integration.py`).
+3. Add offline unit tests that serve scripted responses through an `httpx.MockTransport` and inject the resulting client, plus a live test marked `@pytest.mark.integration` that skips when its credentials are missing (see `tests/test_fingrid_wind_fetcher.py` and `tests/test_fingrid_wind_integration.py`).

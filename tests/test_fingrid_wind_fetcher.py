@@ -1,17 +1,21 @@
 from __future__ import annotations
 
-import io
 import json
-import urllib.error
-import urllib.parse
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 import pyarrow as pa
 import pytest
+from tenacity import wait_none
 
-from datasets import DataSourceFetcher, FetchRequest
-from datasets.fingrid_wind import FingridWindFetcher, run_fetcher
+from datasets import (
+    DataSourceFetcher,
+    FetchRequest,
+    FingridClient,
+    FingridWindFetcher,
+)
+from datasets.fingrid_wind import run_fetcher
 
 API_KEY = "test-api-key"
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
@@ -29,60 +33,59 @@ def payload(records: list[dict[str, Any]], *, last_page: int | None = None) -> d
     return body
 
 
-class FakeResponse:
-    def __init__(self, body: bytes) -> None:
-        self._body = body
-
-    def read(self) -> bytes:
-        return self._body
-
-    def __enter__(self) -> "FakeResponse":
-        return self
-
-    def __exit__(self, *exc_info: object) -> bool:
-        return False
-
-
-class FakeOpener:
-    """Stand-in for urllib.request.urlopen that replays canned responses."""
+class FakeFingridApi:
+    """Scripted Fingrid API served through httpx.MockTransport."""
 
     def __init__(self, responses: list[Any]) -> None:
         self._responses = list(responses)
-        self.requests: list[tuple[Any, float | None]] = []
+        self.requests: list[httpx.Request] = []
 
-    def __call__(self, request: Any, timeout: float | None = None) -> FakeResponse:
-        self.requests.append((request, timeout))
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
         response = self._responses.pop(0)
         if isinstance(response, BaseException):
             raise response
-        if isinstance(response, bytes):
-            return FakeResponse(response)
-        return FakeResponse(json.dumps(response).encode())
+        if isinstance(response, httpx.Response):
+            return response
+        return httpx.Response(200, json=response)
 
     @property
-    def urls(self) -> list[str]:
-        return [request.full_url for request, _ in self.requests]
+    def urls(self) -> list[httpx.URL]:
+        return [request.url for request in self.requests]
 
 
-def make_fetcher(opener: FakeOpener, **kwargs: Any) -> FingridWindFetcher:
-    return FingridWindFetcher(API_KEY, opener=opener, **kwargs)
+def make_fetcher(
+    api: FakeFingridApi,
+    *,
+    dataset_id: int = 75,
+    page_size: int = 20_000,
+    **client_options: Any,
+) -> FingridWindFetcher:
+    client = FingridClient(
+        API_KEY,
+        transport=httpx.MockTransport(api.handler),
+        retry_wait=wait_none(),
+        page_size=page_size,
+        **client_options,
+    )
+    return FingridWindFetcher(API_KEY, dataset_id=dataset_id, client=client)
 
 
 def test_fetcher_satisfies_data_source_protocol():
-    fetcher = make_fetcher(FakeOpener([]))
+    fetcher = make_fetcher(FakeFingridApi([]))
 
     assert isinstance(fetcher, DataSourceFetcher)
     assert fetcher.source_name == "fingrid_75"
 
 
 def test_source_name_reflects_custom_dataset_id():
-    fetcher = make_fetcher(FakeOpener([]), dataset_id=268)
+    fetcher = make_fetcher(FakeFingridApi([]), dataset_id=268)
 
     assert fetcher.source_name == "fingrid_268"
 
 
 def test_fetch_resamples_quarter_hourly_samples_to_hourly_means():
-    opener = FakeOpener([
+    api = FakeFingridApi([
         payload([
             record("2024-01-01T00:00:00.000Z", 1.0),
             record("2024-01-01T00:15:00.000Z", 2.0),
@@ -94,7 +97,7 @@ def test_fetch_resamples_quarter_hourly_samples_to_hourly_means():
             record("2024-01-01T01:45:00.000Z", 8.0),
         ]),
     ])
-    fetcher = make_fetcher(opener)
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
@@ -109,7 +112,7 @@ def test_fetch_resamples_quarter_hourly_samples_to_hourly_means():
 
 
 def test_fetch_honours_finer_requested_resolution():
-    opener = FakeOpener([
+    api = FakeFingridApi([
         payload([
             record("2024-01-01T00:00:00Z", 1.0),
             record("2024-01-01T00:15:00Z", 2.0),
@@ -117,7 +120,7 @@ def test_fetch_honours_finer_requested_resolution():
             record("2024-01-01T00:45:00Z", 4.0),
         ]),
     ])
-    fetcher = make_fetcher(opener)
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END, resolution="15min"))
 
@@ -133,7 +136,7 @@ def test_fetch_honours_finer_requested_resolution():
 def test_fetch_only_includes_rows_inside_half_open_window():
     start = datetime(2024, 1, 1, 0, 15, tzinfo=UTC)
     end = datetime(2024, 1, 1, 1, 0, tzinfo=UTC)
-    opener = FakeOpener([
+    api = FakeFingridApi([
         payload([
             record("2024-01-01T00:00:00Z", 100.0),  # before start
             record("2024-01-01T00:15:00Z", 2.0),
@@ -141,7 +144,7 @@ def test_fetch_only_includes_rows_inside_half_open_window():
             record("2024-01-01T01:00:00Z", 100.0),  # at exclusive end
         ]),
     ])
-    fetcher = make_fetcher(opener)
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=start, end_utc=end))
 
@@ -150,14 +153,14 @@ def test_fetch_only_includes_rows_inside_half_open_window():
 
 
 def test_fetch_skips_null_values():
-    opener = FakeOpener([
+    api = FakeFingridApi([
         payload([
             record("2024-01-01T00:00:00Z", None),
             record("2024-01-01T00:15:00Z", 1.0),
             record("2024-01-01T00:30:00Z", 3.0),
         ]),
     ])
-    fetcher = make_fetcher(opener)
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
@@ -165,13 +168,13 @@ def test_fetch_skips_null_values():
 
 
 def test_fetch_averages_duplicate_timestamps():
-    opener = FakeOpener([
+    api = FakeFingridApi([
         payload([
             record("2024-01-01T00:00:00Z", 1.0),
             record("2024-01-01T00:00:00Z", 3.0),
         ]),
     ])
-    fetcher = make_fetcher(opener)
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
@@ -179,8 +182,8 @@ def test_fetch_averages_duplicate_timestamps():
 
 
 def test_fetch_accepts_numeric_strings():
-    opener = FakeOpener([payload([record("2024-01-01T00:00:00Z", "12.5")])])
-    fetcher = make_fetcher(opener)
+    api = FakeFingridApi([payload([record("2024-01-01T00:00:00Z", "12.5")])])
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
@@ -188,8 +191,8 @@ def test_fetch_accepts_numeric_strings():
 
 
 def test_fetch_returns_empty_table_with_expected_schema():
-    opener = FakeOpener([payload([])])
-    fetcher = make_fetcher(opener)
+    api = FakeFingridApi([payload([])])
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
@@ -198,192 +201,175 @@ def test_fetch_returns_empty_table_with_expected_schema():
 
 
 def test_fetch_follows_pagination_until_last_page():
-    opener = FakeOpener([
+    api = FakeFingridApi([
         payload([record("2024-01-01T00:00:00Z", 1.0)], last_page=2),
         payload([record("2024-01-01T00:15:00Z", 3.0)], last_page=2),
     ])
-    fetcher = make_fetcher(opener, page_size=1)
+    fetcher = make_fetcher(api, page_size=1)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
-    assert len(opener.requests) == 2
-    assert urllib.parse.parse_qs(urllib.parse.urlparse(opener.urls[0]).query)["page"] == ["1"]
-    assert urllib.parse.parse_qs(urllib.parse.urlparse(opener.urls[1]).query)["page"] == ["2"]
+    assert len(api.requests) == 2
+    assert [url.params["page"] for url in api.urls] == ["1", "2"]
     assert table.column("wind_mw").to_pylist() == pytest.approx([2.0])
 
 
 def test_fetch_stops_when_unpaginated_page_is_short():
-    opener = FakeOpener([
+    api = FakeFingridApi([
         payload([
             record("2024-01-01T00:00:00Z", 1.0),
             record("2024-01-01T00:15:00Z", 2.0),
         ]),
         payload([record("2024-01-01T00:30:00Z", 3.0)]),
     ])
-    fetcher = make_fetcher(opener, page_size=2)
+    fetcher = make_fetcher(api, page_size=2)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
-    assert len(opener.requests) == 2
+    assert len(api.requests) == 2
     assert table.column("wind_mw").to_pylist() == pytest.approx([2.0])
 
 
 def test_fetch_accepts_legacy_bare_list_payload():
-    opener = FakeOpener([[record("2024-01-01T00:00:00Z", 4.0)]])
-    fetcher = make_fetcher(opener, page_size=10)
+    api = FakeFingridApi([[record("2024-01-01T00:00:00Z", 4.0)]])
+    fetcher = make_fetcher(api, page_size=10)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
     assert table.column("wind_mw").to_pylist() == pytest.approx([4.0])
-    assert len(opener.requests) == 1
+    assert len(api.requests) == 1
 
 
 def test_fetch_sends_api_key_and_utc_window():
-    opener = FakeOpener([payload([])])
-    fetcher = make_fetcher(opener)
+    api = FakeFingridApi([payload([])])
+    fetcher = make_fetcher(api)
 
     fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
-    request, timeout = opener.requests[0]
-    assert request.get_header("X-api-key") == API_KEY
-    assert request.get_header("Accept") == "application/json"
-    assert timeout == 30.0
-    query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
-    assert query["startTime"] == ["2024-01-01T00:00:00Z"]
-    assert query["endTime"] == ["2024-01-01T02:00:00Z"]
-    assert query["pageSize"] == ["20000"]
-    assert "/datasets/75/data" in request.full_url
+    request = api.requests[0]
+    assert request.headers["x-api-key"] == API_KEY
+    assert request.url.path == "/api/datasets/75/data"
+    assert request.url.params["startTime"] == "2024-01-01T00:00:00Z"
+    assert request.url.params["endTime"] == "2024-01-01T02:00:00Z"
+    assert request.url.params["pageSize"] == "20000"
 
 
-def http_error(
-    code: int, body: bytes = b"", headers: dict[str, str] | None = None
-) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError(
-        "https://data.fingrid.fi", code, "error", headers, io.BytesIO(body)
-    )
+def test_fetch_raises_on_non_retryable_http_error():
+    api = FakeFingridApi([httpx.Response(401, json={"error": "invalid api key"})])
+    fetcher = make_fetcher(api)
 
-
-def test_fetch_wraps_http_errors_without_retrying_client_errors():
-    opener = FakeOpener([http_error(401, b'{"error":"invalid api key"}')])
-    fetcher = make_fetcher(opener, sleep=lambda _: pytest.fail("must not sleep on 401"))
-
-    with pytest.raises(RuntimeError, match="HTTP 401.*invalid api key"):
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
         fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
-    assert len(opener.requests) == 1
+    assert exc_info.value.response.status_code == 401
+    assert len(api.requests) == 1
 
 
 def test_fetch_retries_rate_limited_requests():
-    sleeps: list[float] = []
-    opener = FakeOpener([
-        http_error(429, b'{"message":"Rate limit is exceeded. Try again in 2 seconds."}'),
+    api = FakeFingridApi([
+        httpx.Response(429, json={"message": "Rate limit is exceeded."}),
         payload([record("2024-01-01T00:00:00Z", 4.0)]),
     ])
-    fetcher = make_fetcher(opener, sleep=sleeps.append)
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
-    assert sleeps == [2.0]
-    assert len(opener.requests) == 2
+    assert len(api.requests) == 2
     assert table.column("wind_mw").to_pylist() == pytest.approx([4.0])
 
 
-def test_fetch_honours_retry_after_header():
-    sleeps: list[float] = []
-    opener = FakeOpener([
-        http_error(429, headers={"Retry-After": "7"}),
+def test_fetch_retries_transport_errors():
+    api = FakeFingridApi([
+        httpx.ConnectError("boom"),
         payload([record("2024-01-01T00:00:00Z", 4.0)]),
     ])
-    fetcher = make_fetcher(opener, sleep=sleeps.append)
-
-    fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert sleeps == [7.0]
-
-
-def test_fetch_backs_off_exponentially_and_gives_up_after_max_retries():
-    sleeps: list[float] = []
-    error = http_error(503)
-    opener = FakeOpener([error, error, error])
-    fetcher = make_fetcher(opener, max_retries=2, sleep=sleeps.append)
-
-    with pytest.raises(RuntimeError, match="HTTP 503"):
-        fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert sleeps == [2.0, 4.0]
-    assert len(opener.requests) == 3
-
-
-def test_fetch_resumes_pagination_after_rate_limit():
-    opener = FakeOpener([
-        payload([record("2024-01-01T00:00:00Z", 1.0)], last_page=2),
-        http_error(429),
-        payload([record("2024-01-01T00:15:00Z", 3.0)], last_page=2),
-    ])
-    fetcher = make_fetcher(opener, page_size=1, sleep=lambda _: None)
+    fetcher = make_fetcher(api)
 
     table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
-    assert len(opener.requests) == 3
+    assert len(api.requests) == 2
+    assert table.column("wind_mw").to_pylist() == pytest.approx([4.0])
+
+
+def test_fetch_gives_up_after_max_retries():
+    api = FakeFingridApi([
+        httpx.Response(503),
+        httpx.Response(503),
+        httpx.Response(503),
+    ])
+    fetcher = make_fetcher(api, max_retries=2)
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
+
+    assert exc_info.value.response.status_code == 503
+    assert len(api.requests) == 3
+
+
+def test_fetch_resumes_pagination_after_rate_limit():
+    api = FakeFingridApi([
+        payload([record("2024-01-01T00:00:00Z", 1.0)], last_page=2),
+        httpx.Response(429),
+        payload([record("2024-01-01T00:15:00Z", 3.0)], last_page=2),
+    ])
+    fetcher = make_fetcher(api, page_size=1)
+
+    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
+
+    assert len(api.requests) == 3
     assert table.column("wind_mw").to_pylist() == pytest.approx([2.0])
 
 
-def test_fetch_wraps_connection_errors():
-    fetcher = make_fetcher(FakeOpener([urllib.error.URLError("boom")]))
+def test_fetch_raises_on_invalid_json():
+    api = FakeFingridApi([httpx.Response(200, content=b"<html>rate limited</html>")])
+    fetcher = make_fetcher(api)
 
-    with pytest.raises(RuntimeError, match="Could not reach Fingrid API: boom"):
-        fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-
-def test_fetch_wraps_invalid_json():
-    fetcher = make_fetcher(FakeOpener([b"<html>rate limited</html>"]))
-
-    with pytest.raises(RuntimeError, match="invalid JSON"):
+    with pytest.raises(json.JSONDecodeError):
         fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
 
 
 def test_fetch_rejects_naive_datetimes():
-    fetcher = make_fetcher(FakeOpener([]))
+    fetcher = make_fetcher(FakeFingridApi([]))
 
     with pytest.raises(ValueError, match="must be timezone-aware"):
         fetcher.fetch(FetchRequest(start_utc=datetime(2024, 1, 1), end_utc=END))
 
 
 def test_fetch_rejects_inverted_window():
-    fetcher = make_fetcher(FakeOpener([]))
+    fetcher = make_fetcher(FakeFingridApi([]))
 
     with pytest.raises(ValueError, match="must be before end_utc"):
         fetcher.fetch(FetchRequest(start_utc=END, end_utc=START))
 
 
 def test_fetch_rejects_unsupported_resolution():
-    fetcher = make_fetcher(FakeOpener([]))
+    fetcher = make_fetcher(FakeFingridApi([]))
 
     with pytest.raises(ValueError, match="Unsupported resolution '5min'"):
         fetcher.fetch(FetchRequest(start_utc=START, end_utc=END, resolution="5min"))
 
 
-def test_constructor_rejects_missing_api_key():
-    with pytest.raises(ValueError, match="API key is required"):
-        FingridWindFetcher("")
-
-
-def test_constructor_rejects_non_positive_page_size():
-    with pytest.raises(ValueError, match="page_size must be positive"):
-        FingridWindFetcher(API_KEY, page_size=0)
-
-
-def test_constructor_rejects_negative_max_retries():
-    with pytest.raises(ValueError, match="max_retries must be non-negative"):
-        FingridWindFetcher(API_KEY, max_retries=-1)
-
-
 def test_fetch_rejects_record_without_timestamp():
-    opener = FakeOpener([payload([{"value": 1.0}])])
-    fetcher = make_fetcher(opener, page_size=10)
+    api = FakeFingridApi([payload([{"value": 1.0}])])
+    fetcher = make_fetcher(api, page_size=10)
 
     with pytest.raises(ValueError, match="missing 'startTime'"):
         fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
+
+
+def test_client_rejects_missing_api_key():
+    with pytest.raises(ValueError, match="API key is required"):
+        FingridClient("")
+
+
+def test_client_rejects_non_positive_page_size():
+    with pytest.raises(ValueError, match="page_size must be positive"):
+        FingridClient(API_KEY, page_size=0)
+
+
+def test_client_rejects_negative_max_retries():
+    with pytest.raises(ValueError, match="max_retries must be non-negative"):
+        FingridClient(API_KEY, max_retries=-1)
 
 
 class _StubFetcher:

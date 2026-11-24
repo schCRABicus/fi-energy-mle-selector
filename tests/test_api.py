@@ -32,6 +32,7 @@ def test_public_package_exports_the_api_and_fetchers():
     assert set(datasets.__all__) == {
         "DataSourceFetcher",
         "FetchRequest",
+        "FingridClient",
         "FingridWindFetcher",
         "run_fetcher",
     }
