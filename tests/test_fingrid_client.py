@@ -202,6 +202,23 @@ def test_client_rejects_record_without_timestamp():
         samples(make_client(api, page_size=10))
 
 
+def test_client_rejects_unexpected_payload_type():
+    api = FakeFingridApi(["not-a-page"])
+
+    with pytest.raises(ValueError, match="Unexpected Fingrid response type: str"):
+        samples(make_client(api))
+
+
+def test_client_rejects_naive_window():
+    api = FakeFingridApi([])
+    client = make_client(api)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        list(client.iter_samples(75, datetime(2024, 1, 1), datetime(2024, 1, 2)))
+
+    assert api.requests == []
+
+
 def test_client_rejects_missing_api_key():
     with pytest.raises(ValueError, match="API key is required"):
         FingridClient("")

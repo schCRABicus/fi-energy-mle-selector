@@ -17,11 +17,14 @@ BUNDLED_SAMPLE = Path(__file__).parents[1] / "datasets" / "fingrid_wind" / "data
 
 
 def write_local(
-    tmp_path: Path, rows: list[tuple[datetime, float | None]]
+    tmp_path: Path,
+    rows: list[tuple[datetime, float | None]],
+    *,
+    tz: str | None = "UTC",
 ) -> Path:
     """Writes a local snapshot with the same layout as the bundled parquet file."""
     schema = pa.schema([
-        pa.field("timestamp_utc", pa.timestamp("us", tz="UTC")),
+        pa.field("timestamp_utc", pa.timestamp("us", tz=tz)),
         pa.field("wind_mw", pa.float32()),
     ])
     table = pa.Table.from_pydict(
@@ -168,6 +171,16 @@ def test_fetch_from_local_supports_fifteen_minute_resolution(tmp_path):
         pytest.approx(3.0),
         pytest.approx(4.0),
     ]
+
+
+def test_fetch_from_local_assumes_utc_for_naive_timestamps(tmp_path):
+    rows = [(datetime(2024, 1, 1, 0, 0), 1.0)]
+    fetcher = make_fetcher(write_local(tmp_path, rows, tz=None))
+
+    table = fetcher.fetch_from_local(FetchRequest(START, END))
+
+    assert table["timestamp_utc"].to_pylist() == [START]
+    assert table["wind_mw"].to_pylist() == [pytest.approx(1.0)]
 
 
 def test_fetch_from_local_normalizes_request_timezone_to_utc():

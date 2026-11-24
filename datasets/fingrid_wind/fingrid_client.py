@@ -8,6 +8,7 @@ import httpx
 from tenacity import RetryCallState
 
 from datasets.http_client import JsonApiClient
+from datasets.utils import utc_window
 
 FINGRID_API_BASE_URL = "https://data.fingrid.fi/api/"
 
@@ -45,10 +46,10 @@ class FingridClient(JsonApiClient):
         self, dataset_id: int, start: datetime, end: datetime
     ) -> Iterator[tuple[datetime, float | None]]:
         """Yield ``(timestamp_utc, value)`` for every record Fingrid returns for the window."""
+        start, end = utc_window(start, end)
         for page in range(1, self.MAX_PAGES + 1):
             records, last_page = self._get_page(dataset_id, start, end, page)
-            for record in records:
-                yield self._parse_record(record)
+            yield from map(self._parse_record, records)
 
             if last_page is not None:
                 if page >= last_page:
@@ -77,6 +78,10 @@ class FingridClient(JsonApiClient):
         )
         if isinstance(payload, list):  # legacy bare-list response
             return payload, None
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"Unexpected Fingrid response type: {type(payload).__name__}."
+            )
         pagination = payload.get("pagination") or {}
         return payload.get("data") or [], pagination.get("lastPage")
 
@@ -89,7 +94,7 @@ class FingridClient(JsonApiClient):
         raw_timestamp = record.get("startTime")
         if raw_timestamp is None:
             raise ValueError("Fingrid API record is missing 'startTime'.")
-        timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
+        timestamp = datetime.fromisoformat(str(raw_timestamp))
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=UTC)
         raw_value = record.get("value")

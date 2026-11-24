@@ -26,6 +26,7 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 ├── datasets/         # Data-source adapters: shared contract + per-source fetchers
 │   ├── api.py        # FetchRequest and DataSourceFetcher protocol
 │   ├── http_client.py# JSON HTTP client with retries (httpx + tenacity)
+│   ├── utils.py      # Window validation, resampling, local Parquet loading
 │   └── fingrid_wind/ # Fingrid client + wind power fetcher (dataset 75)
 │       └── data/     # Committed 1-day, 15-minute Parquet snapshot for offline runs
 ├── tests/            # Offline unit tests and live API integration tests
@@ -121,6 +122,6 @@ Notes:
 
 ### 5. Add a new fetcher
 
-1. Create `datasets/<source>/<source>_fetcher.py` with a class implementing `source_name`, `expected_schema`, `fetch`, and `fetch_from_local` (see the `DataSourceFetcher` protocol in `datasets/api.py`).
+1. Create `datasets/<source>/<source>_fetcher.py` with a class implementing `source_name`, `expected_schema`, `fetch`, and `fetch_from_local` (see the `DataSourceFetcher` protocol in `datasets/api.py`). Reuse `datasets/utils.py` for window validation, resolution lookup, bucket averaging, and local Parquet loading.
 2. Export it from the subpackage's `__init__.py` and from `datasets/__init__.py`.
 3. Add an offline Parquet fixture for fetcher tests, serve scripted HTTP responses through `httpx.MockTransport` for client tests, and add a live test marked `@pytest.mark.integration` that skips when its credentials are missing (see `tests/test_fingrid_wind_fetcher.py`, `tests/test_fingrid_client.py`, and `tests/test_fingrid_wind_integration.py`).
