@@ -41,3 +41,10 @@ class DataSourceFetcher(Protocol):
         casts columns to `expected_schema`, and returns a validated PyArrow Table.
         """
         ...
+
+    def fetch_from_local(self, request: FetchRequest) -> pa.Table:
+        """
+        Returns data from a bundled/local snapshot when one is available, otherwise
+        falls back to `fetch`. Output follows the same `expected_schema` contract.
+        """
+        ...

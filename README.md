@@ -27,6 +27,7 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │   ├── api.py        # FetchRequest and DataSourceFetcher protocol
 │   ├── http_client.py# JSON HTTP client with retries (httpx + tenacity)
 │   └── fingrid_wind/ # Fingrid client + wind power fetcher (dataset 75)
+│       └── data/     # Committed 1-day, 15-minute Parquet snapshot for offline runs
 ├── tests/            # Offline unit tests and live API integration tests
 ├── configs/          # (planned) retail contract definitions & household load profiles
 ├── data/             # (planned) raw and processed hourly datasets (git-ignored)
@@ -75,10 +76,10 @@ Run a single file or test:
 
 ```bash
 uv run pytest tests/test_fingrid_wind_fetcher.py -q
-uv run pytest tests/test_fingrid_wind_fetcher.py::test_fetch_resamples_quarter_hourly_samples_to_hourly_means
+uv run pytest tests/test_fingrid_wind_fetcher.py::test_fetch_from_local_reads_bundled_sample
 ```
 
-The integration tests hit the real API (a handful of requests, with automatic 429 retry/backoff), so avoid running them in tight loops against the free-tier quota.
+Unit tests never touch the network: fetcher tests read the committed snapshot at `datasets/fingrid_wind/data/fingrid_wind_sample.parquet` (2024-03-01, 96 quarter-hour samples), and client tests serve scripted responses through `httpx.MockTransport`. Only the integration tests hit the real API (a handful of requests, with automatic 429 retry/backoff), so avoid running them in tight loops against the free-tier quota.
 
 ### 4. Fetch data from a specific fetcher
 
@@ -91,7 +92,7 @@ from datetime import UTC, datetime
 
 from dotenv import load_dotenv
 
-from datasets import FetchRequest, FingridWindFetcher, run_fetcher
+from datasets import FetchRequest, FingridWindFetcher
 
 # Explicit path: load_dotenv() cannot introspect a file path when run via stdin.
 load_dotenv(".env")
@@ -102,7 +103,7 @@ request = FetchRequest(
     end_utc=datetime(2024, 3, 2, tzinfo=UTC),
     resolution="1h",  # "15min", "30min", or "1h"
 )
-table = run_fetcher(fetcher, request)
+table = fetcher.fetch(request)
 
 print(table)
 print(table.slice(0, 3).to_pylist())
@@ -113,11 +114,13 @@ Notes:
 - Windows are half-open `[start_utc, end_utc)` and must be timezone-aware.
 - Fingrid serves 15-minute samples after June 2023; `resolution="1h"` returns hourly means, `resolution="15min"` leaves the raw cadence.
 - Multi-year ranges are paginated automatically and retried on Fingrid rate limits.
-- `run_fetcher` re-validates the output against `fetcher.expected_schema`; call `fetcher.fetch(...)` directly to skip that extra check.
+- `fetch` always calls the remote API. `fetch_from_local` returns data from the bundled snapshot when it exists and falls back to `fetch` otherwise, so the same request works offline.
+- The bundled snapshot lives at `datasets/fingrid_wind/data/fingrid_wind_sample.parquet` (2024-03-01 only). Override it with `FingridWindFetcher(..., local_path="path/to/snapshot.parquet")` or disable it with `local_path=None`.
+- Output tables are built against `fetcher.expected_schema`, so `table.schema == fetcher.expected_schema` holds for every fetch.
 - To persist a table, write it to Parquet with pyarrow: `import pyarrow.parquet as pq; pq.write_table(table, "data/wind.parquet")` (create `data/` first).
 
 ### 5. Add a new fetcher
 
-1. Create `datasets/<source>/<source>_fetcher.py` with a class implementing `source_name`, `expected_schema`, and `fetch` (see the `DataSourceFetcher` protocol in `datasets/api.py`).
+1. Create `datasets/<source>/<source>_fetcher.py` with a class implementing `source_name`, `expected_schema`, `fetch`, and `fetch_from_local` (see the `DataSourceFetcher` protocol in `datasets/api.py`).
 2. Export it from the subpackage's `__init__.py` and from `datasets/__init__.py`.
-3. Add offline unit tests that serve scripted responses through an `httpx.MockTransport` and inject the resulting client, plus a live test marked `@pytest.mark.integration` that skips when its credentials are missing (see `tests/test_fingrid_wind_fetcher.py` and `tests/test_fingrid_wind_integration.py`).
+3. Add an offline Parquet fixture for fetcher tests, serve scripted HTTP responses through `httpx.MockTransport` for client tests, and add a live test marked `@pytest.mark.integration` that skips when its credentials are missing (see `tests/test_fingrid_wind_fetcher.py`, `tests/test_fingrid_client.py`, and `tests/test_fingrid_wind_integration.py`).

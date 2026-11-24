@@ -1,406 +1,284 @@
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 
-import httpx
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
-from tenacity import wait_none
 
-from datasets import (
-    DataSourceFetcher,
-    FetchRequest,
-    FingridClient,
-    FingridWindFetcher,
-)
-from datasets.fingrid_wind import run_fetcher
+from datasets import DataSourceFetcher, FetchRequest, FingridWindFetcher
+from datasets.fingrid_wind.fingrid_wind_fetcher import DEFAULT_LOCAL_PATH
 
 API_KEY = "test-api-key"
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 END = datetime(2024, 1, 1, 2, 0, tzinfo=UTC)
+BUNDLED_SAMPLE = Path(__file__).parents[1] / "datasets" / "fingrid_wind" / "data" / "fingrid_wind_sample.parquet"
 
 
-def record(timestamp: str, value: Any) -> dict[str, Any]:
-    return {"datasetId": 75, "startTime": timestamp, "endTime": timestamp, "value": value}
+def write_local(
+    tmp_path: Path, rows: list[tuple[datetime, float | None]]
+) -> Path:
+    """Writes a local snapshot with the same layout as the bundled parquet file."""
+    schema = pa.schema([
+        pa.field("timestamp_utc", pa.timestamp("us", tz="UTC")),
+        pa.field("wind_mw", pa.float32()),
+    ])
+    table = pa.Table.from_pydict(
+        {
+            "timestamp_utc": [timestamp for timestamp, _ in rows],
+            "wind_mw": [value for _, value in rows],
+        },
+        schema=schema,
+    )
+    path = tmp_path / "wind.parquet"
+    pq.write_table(table, path)
+    return path
 
 
-def payload(records: list[dict[str, Any]], *, last_page: int | None = None) -> dict[str, Any]:
-    body: dict[str, Any] = {"data": records}
-    if last_page is not None:
-        body["pagination"] = {"firstPage": 1, "lastPage": last_page}
-    return body
+class StubClient:
+    """Remote client that returns a fixed sample set and records calls."""
 
+    def __init__(self, samples: list[tuple[datetime, float | None]] | None = None) -> None:
+        self._samples = list(samples or [])
+        self.calls: list[tuple[int, datetime, datetime]] = []
 
-class FakeFingridApi:
-    """Scripted Fingrid API served through httpx.MockTransport."""
+    def iter_samples(
+        self, dataset_id: int, start: datetime, end: datetime
+    ) -> list[tuple[datetime, float | None]]:
+        self.calls.append((dataset_id, start, end))
+        return list(self._samples)
 
-    def __init__(self, responses: list[Any]) -> None:
-        self._responses = list(responses)
-        self.requests: list[httpx.Request] = []
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        response = self._responses.pop(0)
-        if isinstance(response, BaseException):
-            raise response
-        if isinstance(response, httpx.Response):
-            return response
-        return httpx.Response(200, json=response)
-
-    @property
-    def urls(self) -> list[httpx.URL]:
-        return [request.url for request in self.requests]
+    def close(self) -> None:
+        pass
 
 
 def make_fetcher(
-    api: FakeFingridApi,
-    *,
-    dataset_id: int = 75,
-    page_size: int = 20_000,
-    **client_options: Any,
+    local_path: str | Path | None,
+    client: StubClient | None = None,
 ) -> FingridWindFetcher:
-    client = FingridClient(
+    return FingridWindFetcher(
         API_KEY,
-        transport=httpx.MockTransport(api.handler),
-        retry_wait=wait_none(),
-        page_size=page_size,
-        **client_options,
+        client=client or StubClient(),  # type: ignore[arg-type]
+        local_path=local_path,
     )
-    return FingridWindFetcher(API_KEY, dataset_id=dataset_id, client=client)
 
 
-def test_fetcher_satisfies_data_source_protocol():
-    fetcher = make_fetcher(FakeFingridApi([]))
-
-    assert isinstance(fetcher, DataSourceFetcher)
-    assert fetcher.source_name == "fingrid_75"
+def test_fetcher_satisfies_datasource_protocol():
+    assert isinstance(make_fetcher(None), DataSourceFetcher)
 
 
-def test_source_name_reflects_custom_dataset_id():
-    fetcher = make_fetcher(FakeFingridApi([]), dataset_id=268)
+def test_source_name_uses_dataset_id():
+    assert make_fetcher(None).source_name == "fingrid_75"
+    assert (
+        FingridWindFetcher(API_KEY, dataset_id=245, client=StubClient(), local_path=None).source_name
+        == "fingrid_245"
+    )
 
-    assert fetcher.source_name == "fingrid_268"
+
+def test_bundled_sample_is_available():
+    assert DEFAULT_LOCAL_PATH == BUNDLED_SAMPLE
+    assert DEFAULT_LOCAL_PATH.is_file()
+    assert DEFAULT_LOCAL_PATH.stat().st_size > 0
 
 
-def test_fetch_resamples_quarter_hourly_samples_to_hourly_means():
-    api = FakeFingridApi([
-        payload([
-            record("2024-01-01T00:00:00.000Z", 1.0),
-            record("2024-01-01T00:15:00.000Z", 2.0),
-            record("2024-01-01T00:30:00.000Z", 3.0),
-            record("2024-01-01T00:45:00.000Z", 4.0),
-            record("2024-01-01T01:00:00.000Z", 5.0),
-            record("2024-01-01T01:15:00.000Z", 6.0),
-            record("2024-01-01T01:30:00.000Z", 7.0),
-            record("2024-01-01T01:45:00.000Z", 8.0),
-        ]),
-    ])
-    fetcher = make_fetcher(api)
+def test_fetch_from_local_reads_bundled_sample():
+    client = StubClient()
+    fetcher = FingridWindFetcher(API_KEY, client=client)  # type: ignore[arg-type]
 
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
+    table = fetcher.fetch_from_local(FetchRequest(START, datetime(2024, 3, 1, 1, 0, tzinfo=UTC)))
 
-    assert table.schema.equals(fetcher.expected_schema, check_metadata=False)
-    assert table.column("timestamp_utc").to_pylist() == [
-        datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
-        datetime(2024, 1, 1, 1, 0, tzinfo=UTC),
+    assert table.schema == fetcher.expected_schema
+    assert table.num_rows == 1
+    assert table["timestamp_utc"].to_pylist() == [datetime(2024, 3, 1, 0, 0, tzinfo=UTC)]
+    assert table["wind_mw"].to_pylist() == [pytest.approx(5531.6051, rel=1e-4)]
+    assert client.calls == []
+
+
+def test_fetch_from_local_resamples_bundled_day():
+    fetcher = make_fetcher(DEFAULT_LOCAL_PATH)
+
+    table = fetcher.fetch_from_local(
+        FetchRequest(
+            datetime(2024, 3, 1, tzinfo=UTC),
+            datetime(2024, 3, 2, tzinfo=UTC),
+        )
+    )
+
+    assert table.num_rows == 24
+    assert table["timestamp_utc"].to_pylist()[0] == datetime(2024, 3, 1, tzinfo=UTC)
+    assert table["timestamp_utc"].to_pylist()[-1] == datetime(2024, 3, 1, 23, tzinfo=UTC)
+    assert all(value > 0 for value in table["wind_mw"].to_pylist())
+
+
+def test_fetch_uses_remote_even_when_local_snapshot_exists():
+    client = StubClient([(START, 4.0)])
+    fetcher = make_fetcher(DEFAULT_LOCAL_PATH, client)
+
+    table = fetcher.fetch(FetchRequest(START, END))
+
+    assert table["wind_mw"].to_pylist() == [pytest.approx(4.0)]
+    assert len(client.calls) == 1
+
+
+def test_fetch_from_local_falls_back_when_snapshot_is_missing(tmp_path):
+    client = StubClient([(START, 4.0)])
+    fetcher = make_fetcher(tmp_path / "missing.parquet", client)
+
+    table = fetcher.fetch_from_local(FetchRequest(START, END))
+
+    assert table["wind_mw"].to_pylist() == [pytest.approx(4.0)]
+    assert client.calls == [(75, START, END)]
+
+
+def test_fetch_from_local_falls_back_when_disabled():
+    client = StubClient([(START, 4.0)])
+    fetcher = make_fetcher(None, client)
+
+    table = fetcher.fetch_from_local(FetchRequest(START, END))
+
+    assert table["wind_mw"].to_pylist() == [pytest.approx(4.0)]
+    assert len(client.calls) == 1
+
+
+def test_fetch_from_local_averages_quarter_hour_samples_into_hours(tmp_path):
+    rows = [(START + timedelta(minutes=15 * i), float(i + 1)) for i in range(8)]
+    fetcher = make_fetcher(write_local(tmp_path, rows))
+
+    table = fetcher.fetch_from_local(FetchRequest(START, END))
+
+    assert table["wind_mw"].to_pylist() == [pytest.approx(2.5), pytest.approx(6.5)]
+
+
+def test_fetch_from_local_supports_fifteen_minute_resolution(tmp_path):
+    rows = [(START.replace(minute=15 * i), float(i + 1)) for i in range(4)]
+    fetcher = make_fetcher(write_local(tmp_path, rows))
+
+    table = fetcher.fetch_from_local(
+        FetchRequest(
+            START,
+            datetime(2024, 1, 1, 1, 0, tzinfo=UTC),
+            resolution="15min",
+        )
+    )
+
+    assert table["wind_mw"].to_pylist() == [
+        pytest.approx(1.0),
+        pytest.approx(2.0),
+        pytest.approx(3.0),
+        pytest.approx(4.0),
     ]
-    assert table.column("wind_mw").to_pylist() == pytest.approx([2.5, 6.5])
-    assert table.column("timestamp_utc").type == pa.timestamp("us", tz="UTC")
-    assert table.column("wind_mw").type == pa.float32()
 
 
-def test_fetch_honours_finer_requested_resolution():
-    api = FakeFingridApi([
-        payload([
-            record("2024-01-01T00:00:00Z", 1.0),
-            record("2024-01-01T00:15:00Z", 2.0),
-            record("2024-01-01T00:30:00Z", 3.0),
-            record("2024-01-01T00:45:00Z", 4.0),
-        ]),
-    ])
-    fetcher = make_fetcher(api)
+def test_fetch_from_local_normalizes_request_timezone_to_utc():
+    fetcher = make_fetcher(BUNDLED_SAMPLE)
+    east_two = timezone(timedelta(hours=2))
 
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END, resolution="15min"))
+    table = fetcher.fetch_from_local(
+        FetchRequest(
+            datetime(2024, 3, 1, 5, 0, tzinfo=east_two),
+            datetime(2024, 3, 1, 7, 0, tzinfo=east_two),
+        )
+    )
 
-    assert table.column("timestamp_utc").to_pylist() == [
-        datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
-        datetime(2024, 1, 1, 0, 15, tzinfo=UTC),
-        datetime(2024, 1, 1, 0, 30, tzinfo=UTC),
-        datetime(2024, 1, 1, 0, 45, tzinfo=UTC),
+    assert table.num_rows == 2
+    assert table["timestamp_utc"].to_pylist() == [
+        datetime(2024, 3, 1, 3, 0, tzinfo=UTC),
+        datetime(2024, 3, 1, 4, 0, tzinfo=UTC),
     ]
-    assert table.column("wind_mw").to_pylist() == pytest.approx([1.0, 2.0, 3.0, 4.0])
 
 
-def test_fetch_only_includes_rows_inside_half_open_window():
-    start = datetime(2024, 1, 1, 0, 15, tzinfo=UTC)
-    end = datetime(2024, 1, 1, 1, 0, tzinfo=UTC)
-    api = FakeFingridApi([
-        payload([
-            record("2024-01-01T00:00:00Z", 100.0),  # before start
-            record("2024-01-01T00:15:00Z", 2.0),
-            record("2024-01-01T00:45:00Z", 4.0),
-            record("2024-01-01T01:00:00Z", 100.0),  # at exclusive end
-        ]),
-    ])
-    fetcher = make_fetcher(api)
+def test_fetch_uses_half_open_window(tmp_path):
+    rows = [
+        (START, 100.0),
+        (START.replace(minute=15), 2.0),
+        (START.replace(minute=45), 4.0),
+        (datetime(2024, 1, 1, 1, 0, tzinfo=UTC), 100.0),
+    ]
+    fetcher = make_fetcher(write_local(tmp_path, rows))
 
-    table = fetcher.fetch(FetchRequest(start_utc=start, end_utc=end))
+    table = fetcher.fetch_from_local(
+        FetchRequest(START.replace(minute=15), datetime(2024, 1, 1, 1, 0, tzinfo=UTC))
+    )
 
-    assert table.column("timestamp_utc").to_pylist() == [datetime(2024, 1, 1, 0, 0, tzinfo=UTC)]
-    assert table.column("wind_mw").to_pylist() == pytest.approx([3.0])
+    assert table["wind_mw"].to_pylist() == [pytest.approx(3.0)]
 
 
-def test_fetch_skips_null_values():
-    api = FakeFingridApi([
-        payload([
-            record("2024-01-01T00:00:00Z", None),
-            record("2024-01-01T00:15:00Z", 1.0),
-            record("2024-01-01T00:30:00Z", 3.0),
-        ]),
-    ])
-    fetcher = make_fetcher(api)
+def test_fetch_skips_null_values(tmp_path):
+    rows = [
+        (START, None),
+        (START.replace(minute=15), 1.0),
+        (START.replace(minute=30), 3.0),
+    ]
+    fetcher = make_fetcher(write_local(tmp_path, rows))
 
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
+    table = fetcher.fetch_from_local(
+        FetchRequest(START, datetime(2024, 1, 1, 1, 0, tzinfo=UTC))
+    )
 
-    assert table.column("wind_mw").to_pylist() == pytest.approx([2.0])
-
-
-def test_fetch_averages_duplicate_timestamps():
-    api = FakeFingridApi([
-        payload([
-            record("2024-01-01T00:00:00Z", 1.0),
-            record("2024-01-01T00:00:00Z", 3.0),
-        ]),
-    ])
-    fetcher = make_fetcher(api)
-
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert table.column("wind_mw").to_pylist() == pytest.approx([2.0])
+    assert table["wind_mw"].to_pylist() == [pytest.approx(2.0)]
 
 
-def test_fetch_accepts_numeric_strings():
-    api = FakeFingridApi([payload([record("2024-01-01T00:00:00Z", "12.5")])])
-    fetcher = make_fetcher(api)
+def test_fetch_averages_duplicate_timestamps(tmp_path):
+    rows = [(START, 1.0), (START, 3.0)]
+    fetcher = make_fetcher(write_local(tmp_path, rows))
 
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
+    table = fetcher.fetch_from_local(
+        FetchRequest(START, datetime(2024, 1, 1, 1, 0, tzinfo=UTC))
+    )
 
-    assert table.column("wind_mw").to_pylist() == pytest.approx([12.5])
+    assert table["wind_mw"].to_pylist() == [pytest.approx(2.0)]
 
 
-def test_fetch_returns_empty_table_with_expected_schema():
-    api = FakeFingridApi([payload([])])
-    fetcher = make_fetcher(api)
+def test_fetch_returns_empty_table_for_window_without_data(tmp_path):
+    fetcher = make_fetcher(write_local(tmp_path, [(START, 1.0)]))
 
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
+    table = fetcher.fetch_from_local(
+        FetchRequest(
+            datetime(2024, 1, 1, 5, 0, tzinfo=UTC),
+            datetime(2024, 1, 1, 6, 0, tzinfo=UTC),
+        )
+    )
 
     assert table.num_rows == 0
-    assert table.schema.equals(fetcher.expected_schema, check_metadata=False)
-
-
-def test_fetch_follows_pagination_until_last_page():
-    api = FakeFingridApi([
-        payload([record("2024-01-01T00:00:00Z", 1.0)], last_page=2),
-        payload([record("2024-01-01T00:15:00Z", 3.0)], last_page=2),
-    ])
-    fetcher = make_fetcher(api, page_size=1)
-
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert len(api.requests) == 2
-    assert [url.params["page"] for url in api.urls] == ["1", "2"]
-    assert table.column("wind_mw").to_pylist() == pytest.approx([2.0])
-
-
-def test_fetch_stops_when_unpaginated_page_is_short():
-    api = FakeFingridApi([
-        payload([
-            record("2024-01-01T00:00:00Z", 1.0),
-            record("2024-01-01T00:15:00Z", 2.0),
-        ]),
-        payload([record("2024-01-01T00:30:00Z", 3.0)]),
-    ])
-    fetcher = make_fetcher(api, page_size=2)
-
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert len(api.requests) == 2
-    assert table.column("wind_mw").to_pylist() == pytest.approx([2.0])
-
-
-def test_fetch_accepts_legacy_bare_list_payload():
-    api = FakeFingridApi([[record("2024-01-01T00:00:00Z", 4.0)]])
-    fetcher = make_fetcher(api, page_size=10)
-
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert table.column("wind_mw").to_pylist() == pytest.approx([4.0])
-    assert len(api.requests) == 1
-
-
-def test_fetch_sends_api_key_and_utc_window():
-    api = FakeFingridApi([payload([])])
-    fetcher = make_fetcher(api)
-
-    fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    request = api.requests[0]
-    assert request.headers["x-api-key"] == API_KEY
-    assert request.url.path == "/api/datasets/75/data"
-    assert request.url.params["startTime"] == "2024-01-01T00:00:00Z"
-    assert request.url.params["endTime"] == "2024-01-01T02:00:00Z"
-    assert request.url.params["pageSize"] == "20000"
-
-
-def test_fetch_raises_on_non_retryable_http_error():
-    api = FakeFingridApi([httpx.Response(401, json={"error": "invalid api key"})])
-    fetcher = make_fetcher(api)
-
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert exc_info.value.response.status_code == 401
-    assert len(api.requests) == 1
-
-
-def test_fetch_retries_rate_limited_requests():
-    api = FakeFingridApi([
-        httpx.Response(429, json={"message": "Rate limit is exceeded."}),
-        payload([record("2024-01-01T00:00:00Z", 4.0)]),
-    ])
-    fetcher = make_fetcher(api)
-
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert len(api.requests) == 2
-    assert table.column("wind_mw").to_pylist() == pytest.approx([4.0])
-
-
-def test_fetch_retries_transport_errors():
-    api = FakeFingridApi([
-        httpx.ConnectError("boom"),
-        payload([record("2024-01-01T00:00:00Z", 4.0)]),
-    ])
-    fetcher = make_fetcher(api)
-
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert len(api.requests) == 2
-    assert table.column("wind_mw").to_pylist() == pytest.approx([4.0])
-
-
-def test_fetch_gives_up_after_max_retries():
-    api = FakeFingridApi([
-        httpx.Response(503),
-        httpx.Response(503),
-        httpx.Response(503),
-    ])
-    fetcher = make_fetcher(api, max_retries=2)
-
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert exc_info.value.response.status_code == 503
-    assert len(api.requests) == 3
-
-
-def test_fetch_resumes_pagination_after_rate_limit():
-    api = FakeFingridApi([
-        payload([record("2024-01-01T00:00:00Z", 1.0)], last_page=2),
-        httpx.Response(429),
-        payload([record("2024-01-01T00:15:00Z", 3.0)], last_page=2),
-    ])
-    fetcher = make_fetcher(api, page_size=1)
-
-    table = fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-    assert len(api.requests) == 3
-    assert table.column("wind_mw").to_pylist() == pytest.approx([2.0])
-
-
-def test_fetch_raises_on_invalid_json():
-    api = FakeFingridApi([httpx.Response(200, content=b"<html>rate limited</html>")])
-    fetcher = make_fetcher(api)
-
-    with pytest.raises(json.JSONDecodeError):
-        fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-
-def test_fetch_rejects_naive_datetimes():
-    fetcher = make_fetcher(FakeFingridApi([]))
-
-    with pytest.raises(ValueError, match="must be timezone-aware"):
-        fetcher.fetch(FetchRequest(start_utc=datetime(2024, 1, 1), end_utc=END))
-
-
-def test_fetch_rejects_inverted_window():
-    fetcher = make_fetcher(FakeFingridApi([]))
-
-    with pytest.raises(ValueError, match="must be before end_utc"):
-        fetcher.fetch(FetchRequest(start_utc=END, end_utc=START))
-
-
-def test_fetch_rejects_unsupported_resolution():
-    fetcher = make_fetcher(FakeFingridApi([]))
-
-    with pytest.raises(ValueError, match="Unsupported resolution '5min'"):
-        fetcher.fetch(FetchRequest(start_utc=START, end_utc=END, resolution="5min"))
-
-
-def test_fetch_rejects_record_without_timestamp():
-    api = FakeFingridApi([payload([{"value": 1.0}])])
-    fetcher = make_fetcher(api, page_size=10)
-
-    with pytest.raises(ValueError, match="missing 'startTime'"):
-        fetcher.fetch(FetchRequest(start_utc=START, end_utc=END))
-
-
-def test_client_rejects_missing_api_key():
-    with pytest.raises(ValueError, match="API key is required"):
-        FingridClient("")
-
-
-def test_client_rejects_non_positive_page_size():
-    with pytest.raises(ValueError, match="page_size must be positive"):
-        FingridClient(API_KEY, page_size=0)
-
-
-def test_client_rejects_negative_max_retries():
-    with pytest.raises(ValueError, match="max_retries must be non-negative"):
-        FingridClient(API_KEY, max_retries=-1)
-
-
-class _StubFetcher:
-    source_name = "stub"
-
-    def __init__(self, expected_schema: pa.Schema, table: pa.Table) -> None:
-        self.expected_schema = expected_schema
-        self._table = table
-
-    def fetch(self, request: FetchRequest) -> pa.Table:
-        return self._table
-
-
-def test_run_fetcher_returns_validated_table():
-    schema = pa.schema([pa.field("value", pa.int64())])
-    table = pa.table({"value": [1, 2, 3]}, schema=schema)
-
-    result = run_fetcher(
-        _StubFetcher(schema, table),
-        FetchRequest(start_utc=START, end_utc=END),
-    )
-
-    assert result is table
-
-
-def test_run_fetcher_rejects_schema_mismatch():
-    expected = pa.schema([pa.field("value", pa.int64())])
-    wrong = pa.table({"value": pa.array([1.0], type=pa.float32())})
-
-    with pytest.raises(TypeError, match="Schema mismatch"):
-        run_fetcher(
-            _StubFetcher(expected, wrong),
-            FetchRequest(start_utc=START, end_utc=END),
-        )
+    assert table.schema == fetcher.expected_schema
+
+
+@pytest.mark.parametrize(
+    ("request_", "message"),
+    [
+        (
+            FetchRequest(datetime(2024, 1, 1), datetime(2024, 1, 2)),
+            "timezone-aware",
+        ),
+        (
+            FetchRequest(START, END, resolution="1d"),
+            "Unsupported resolution",
+        ),
+        (
+            FetchRequest(END, START),
+            "must be before end_utc",
+        ),
+    ],
+)
+def test_invalid_requests_are_rejected(request_, message):
+    fetcher = make_fetcher(BUNDLED_SAMPLE)
+
+    with pytest.raises(ValueError, match=message):
+        fetcher.fetch_from_local(request_)
+
+
+def test_context_manager_closes_client():
+    client = StubClient()
+    fetcher = make_fetcher(None, client)
+    closed = False
+
+    def close() -> None:
+        nonlocal closed
+        closed = True
+
+    client.close = close  # type: ignore[method-assign]
+    with fetcher:
+        pass
+
+    assert closed
