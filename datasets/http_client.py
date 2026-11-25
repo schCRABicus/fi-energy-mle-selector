@@ -15,8 +15,8 @@ from tenacity import (
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
-class JsonApiClient:
-    """Synchronous JSON-over-HTTP client with bounded, exponential retries."""
+class HttpClient:
+    """Synchronous HTTP client with bounded, exponential retries."""
 
     def __init__(
         self,
@@ -45,6 +45,9 @@ class JsonApiClient:
 
     def get_json(self, path: str, *, params: Mapping[str, Any] | None = None) -> Any:
         return self._retrying(self._get, path, params).json()
+
+    def get_text(self, path: str, *, params: Mapping[str, Any] | None = None) -> str:
+        return self._retrying(self._get, path, params).text
 
     def _get(self, path: str, params: Mapping[str, Any] | None) -> httpx.Response:
         response = self._http.get(path, params=params)

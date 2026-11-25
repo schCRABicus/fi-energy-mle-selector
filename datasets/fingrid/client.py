@@ -7,13 +7,13 @@ from typing import Any
 import httpx
 from tenacity import RetryCallState
 
-from datasets.http_client import JsonApiClient
+from datasets.http_client import HttpClient
 from datasets.utils import utc_window
 
 FINGRID_API_BASE_URL = "https://data.fingrid.fi/api/"
 
 
-class FingridClient(JsonApiClient):
+class FingridClient(HttpClient):
     """Fingrid Open Data client for paginated time series."""
 
     MAX_PAGES = 1_000

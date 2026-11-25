@@ -41,4 +41,6 @@ def test_public_package_exports_the_api_and_fetchers():
         "FingridSE3FlowFetcher",
         "FingridWindCapacityFetcher",
         "FingridWindFetcher",
+        "FmiClient",
+        "FmiWeatherFetcher",
     }

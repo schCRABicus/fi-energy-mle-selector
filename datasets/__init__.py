@@ -12,6 +12,8 @@ from datasets.fingrid.hydro import FingridHydroFetcher
 from datasets.fingrid.nuclear import FingridNuclearFetcher
 from datasets.fingrid.wind import FingridWindFetcher
 from datasets.fingrid.wind_capacity import FingridWindCapacityFetcher
+from datasets.fmi.client import FmiClient
+from datasets.fmi.weather import FmiWeatherFetcher
 
 __all__ = [
     "DataSourceFetcher",
@@ -25,4 +27,6 @@ __all__ = [
     "FingridSE3FlowFetcher",
     "FingridWindCapacityFetcher",
     "FingridWindFetcher",
+    "FmiClient",
+    "FmiWeatherFetcher",
 ]

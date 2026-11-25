@@ -25,9 +25,11 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 ```text
 ├── datasets/         # Data-source adapters: shared contract + per-source fetchers
 │   ├── api.py        # FetchRequest and DataSourceFetcher protocol
-│   ├── http_client.py# JSON HTTP client with retries (httpx + tenacity)
+│   ├── http_client.py# HTTP client with retries (httpx + tenacity)
 │   ├── utils.py      # Window validation, resampling, local Parquet loading
-│   └── fingrid/      # Fingrid client, shared series fetcher, per-dataset fetchers
+│   ├── fingrid/      # Fingrid client, shared series fetcher, per-dataset fetchers
+│   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
+│   └── fmi/          # FMI WFS client and city weather fetcher
 │       └── data/     # Committed 1-day Parquet snapshots for offline runs
 ├── tests/            # Offline unit tests and live API integration tests
 ├── configs/          # (planned) retail contract definitions & household load profiles
@@ -43,7 +45,8 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 
 ### Prerequisites
 - [`uv`](https://docs.astral.sh/uv/) — manages the Python 3.14 interpreter and the virtualenv.
-- A free Fingrid Open Data API key from [`data.fingrid.fi`](https://data.fingrid.fi) — only needed for live data and integration tests.
+- A free Fingrid Open Data API key from [`data.fingrid.fi`](https://data.fingrid.fi) — only needed for live Fingrid data and integration tests.
+- FMI Open Data needs no credentials.
 
 ### 1. Install dependencies
 
@@ -70,7 +73,7 @@ Fetchers receive the key as a constructor argument; the live integration tests l
 ```bash
 uv run pytest                       # full suite; live tests skip without FINGRID_API_KEY
 uv run pytest -m "not integration"  # offline unit tests only
-uv run pytest -m integration -rs    # live Fingrid tests only (network + key required)
+uv run pytest -m integration -rs    # all live tests (network; Fingrid also needs the key)
 ```
 
 Run a single file or test:
@@ -80,7 +83,7 @@ uv run pytest tests/test_fingrid_wind_fetcher.py -q
 uv run pytest tests/test_fingrid_wind_fetcher.py::test_fetch_from_local_reads_bundled_sample
 ```
 
-Unit tests never touch the network: fetcher tests read the committed snapshots under `datasets/fingrid/data/` (all covering 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. The snapshots hold the raw Fingrid cadence: 96 quarter-hour samples for wind generation, consumption, and each cross-border flow, 24 hourly samples for wind capacity, and 958 roughly-90-second samples for nuclear and hydro. Only the integration tests hit the real API (a handful of requests, with automatic 429 retry/backoff), so avoid running them in tight loops against the free-tier quota.
+Unit tests never touch the network: fetcher tests read the committed snapshots under `datasets/fingrid/data/` and `datasets/fmi/data/` (all covering 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. The Fingrid snapshots hold the raw cadence: 96 quarter-hour samples for wind generation, consumption, and each cross-border flow, 24 hourly samples for wind capacity, and 958 roughly-90-second samples for nuclear and hydro. Each FMI snapshot holds 24 hourly rows for one city. Only the integration tests hit the real APIs (a handful of requests, with automatic retry/backoff), so avoid running them in tight loops against the free-tier quota.
 
 ### 4. Fetch data from a specific fetcher
 
@@ -132,6 +135,41 @@ Notes:
 - Output tables are built against `fetcher.expected_schema`, so `table.schema == fetcher.expected_schema` holds for every fetch.
 - To persist a table, write it to Parquet with pyarrow: `import pyarrow.parquet as pq; pq.write_table(table, "data/wind.parquet")` (create `data/` first).
 
+#### FMI weather (Helsinki, Vaasa, Oulu)
+
+`FmiWeatherFetcher` takes a city name instead of an API key and returns `timestamp_utc`, `temperature_c`, `wind_speed_ms`, and `radiation_wm2`.
+
+| City | Weather station | Radiation station |
+| --- | --- | --- |
+| `helsinki` (alias `kaisaniemi`) | Helsinki Kaisaniemi (100971) | Helsinki Kumpula (101004) |
+| `vaasa` | Vaasa Klemettilä (101485) | Seinäjoki Pelmaa (101486) |
+| `oulu` | Oulu Vihreäsaari (101794) | Oulu Vihreäsaari (101794) |
+
+```bash
+uv run python - <<'PY'
+from datetime import UTC, datetime
+
+from datasets import FetchRequest, FmiWeatherFetcher
+
+request = FetchRequest(
+    start_utc=datetime(2024, 3, 1, tzinfo=UTC),
+    end_utc=datetime(2024, 3, 2, tzinfo=UTC),
+)
+for city in ("helsinki", "vaasa", "oulu"):
+    with FmiWeatherFetcher(city) as fetcher:
+        table = fetcher.fetch(request)
+    print(fetcher.source_name, table.num_rows)
+    print(table.slice(0, 3).to_pylist())
+PY
+```
+
+Notes:
+- FMI Open Data requires no API key. Only `resolution="1h"` is supported.
+- Radiation comes from the nearest station with a multi-year record, which is why Vaasa uses Seinäjoki Pelmaa rather than a station inside the city. Values are FMI's one-minute global-radiation sample at the top of each hour (`GLOB_1MIN`, `timestep=60`), not an hourly mean. Small negative values at night are sensor offset and are preserved.
+- FMI caps one WFS request at 31 days for hourly weather and 7 days for radiation, so `FmiClient` chunks long windows automatically. A 3-year radiation pull issues about 157 requests per city and can take minutes.
+- Missing observations become null values in the output table.
+- `fetch_from_local` reads `datasets/fmi/data/<city>_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
+
 The Phase 1 historical pull (3 years, hourly) loops over the fetchers and writes one Parquet file per series:
 
 ```bash
@@ -153,18 +191,17 @@ from datasets import (
     FingridSE3FlowFetcher,
     FingridWindCapacityFetcher,
     FingridWindFetcher,
+    FmiWeatherFetcher,
 )
 
 load_dotenv(".env")
-output_dir = Path("data/fingrid")
-output_dir.mkdir(parents=True, exist_ok=True)
 
 request = FetchRequest(
     start_utc=datetime(2022, 1, 1, tzinfo=UTC),
     end_utc=datetime(2025, 1, 1, tzinfo=UTC),
     resolution="1h",
 )
-fetchers = (
+fingrid_fetchers = (
     FingridWindFetcher(os.environ["FINGRID_API_KEY"]),
     FingridWindCapacityFetcher(os.environ["FINGRID_API_KEY"]),
     FingridConsumptionFetcher(os.environ["FINGRID_API_KEY"]),
@@ -174,13 +211,24 @@ fetchers = (
     FingridSE3FlowFetcher(os.environ["FINGRID_API_KEY"]),
     FingridEEFlowFetcher(os.environ["FINGRID_API_KEY"]),
 )
-for fetcher in fetchers:
-    with fetcher:
-        table = fetcher.fetch(request)
-    pq.write_table(table, output_dir / f"{fetcher.source_name}.parquet", compression="zstd")
-    print(fetcher.source_name, table.num_rows)
+fmi_fetchers = tuple(FmiWeatherFetcher(city) for city in ("helsinki", "vaasa", "oulu"))
+
+for source, fetchers in (("fingrid", fingrid_fetchers), ("fmi", fmi_fetchers)):
+    output_dir = Path("data") / source
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for fetcher in fetchers:
+        with fetcher:
+            table = fetcher.fetch(request)
+        pq.write_table(
+            table,
+            output_dir / f"{fetcher.source_name}.parquet",
+            compression="zstd",
+        )
+        print(fetcher.source_name, table.num_rows)
 PY
 ```
+
+The FMI leg is slower because FMI caps radiation requests at seven days; expect several minutes and keep the free-tier request volume in mind.
 
 ### 5. Add a new fetcher
 
