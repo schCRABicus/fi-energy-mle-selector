@@ -1,6 +1,8 @@
 """Data acquisition layer: shared contracts and per-source clients/fetchers."""
 
 from datasets.api import DataSourceFetcher, FetchRequest
+from datasets.energy_charts.client import EnergyChartsClient
+from datasets.energy_charts.spot import NordPoolSpotFetcher
 from datasets.fingrid.client import FingridClient
 from datasets.fingrid.consumption import FingridConsumptionFetcher
 from datasets.fingrid.flows import (
@@ -18,6 +20,7 @@ from datasets.fmi.weather import FmiWeatherFetcher
 __all__ = [
     "DataSourceFetcher",
     "FetchRequest",
+    "EnergyChartsClient",
     "FingridClient",
     "FingridConsumptionFetcher",
     "FingridEEFlowFetcher",
@@ -29,4 +32,5 @@ __all__ = [
     "FingridWindFetcher",
     "FmiClient",
     "FmiWeatherFetcher",
+    "NordPoolSpotFetcher",
 ]

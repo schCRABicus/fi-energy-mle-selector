@@ -43,4 +43,6 @@ def test_public_package_exports_the_api_and_fetchers():
         "FingridWindFetcher",
         "FmiClient",
         "FmiWeatherFetcher",
+        "EnergyChartsClient",
+        "NordPoolSpotFetcher",
     }

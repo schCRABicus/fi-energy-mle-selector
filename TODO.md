@@ -6,7 +6,7 @@
 - [x] Fetch 3 years of national electricity consumption (Dataset `124` for historical 15-min/hourly series, or Dataset `193`), nuclear power (Dataset `188`), and hydro power (Dataset `191`) from Fingrid.
 - [x] Fetch 3 years of cross-border transmission flows between Finland and `SE1`, `SE3`, and `EE` from Fingrid.
 - [x] Download 3 years of hourly temperature, wind speed, and radiation data from FMI Open Data (`en.ilmatieteenlaitos.fi/open-data`) for Helsinki (Kaisaniemi), Vaasa, and Oulu.
-- [ ] Download 3 years of hourly Nord Pool FI spot prices (`c/kWh`) from `sahkonhintatanaan.fi` or ENTSO-E.
+- [x] Download 3 years of hourly Nord Pool FI spot prices (`c/kWh`) via the Energy-Charts API (ENTSO-E / Nord Pool data); `sahkonhintatanaan.fi` is offline and ENTSO-E's own API needs a token.
 - [ ] Align and merge all Fingrid (resampling 15-minute series post-June 2023 to hourly means), FMI, and spot price time series onto a single UTC hourly index, interpolating short gaps (< 3 hours) and dropping incomplete boundary rows.
 
 ## Phase 2: Feature Engineering (24-Feature Pipeline)

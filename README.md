@@ -18,7 +18,7 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 ## Data Sources (Finland)
 - **Grid Supply, Wind, Nuclear, Hydro & Cross-Border Flows:** Fingrid Open Data (`data.fingrid.fi`)
 - **Regional Weather (Temperature, Wind Speed, Radiation):** FMI Open Data (`en.ilmatieteenlaitos.fi/open-data`)
-- **Day-Ahead Spot Prices (FI Area):** Nord Pool / ENTSO-E / `sahkonhintatanaan.fi`
+- **Day-Ahead Spot Prices (FI Area):** Nord Pool / ENTSO-E data via the Energy-Charts API (`api.energy-charts.info`); `sahkonhintatanaan.fi` is no longer online
 - **Retail Contract Offers:** Finnish Energy Authority (`sahkonhinta.fi`)
 
 ## Repository Structure
@@ -29,7 +29,9 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │   ├── utils.py      # Window validation, resampling, local Parquet loading
 │   ├── fingrid/      # Fingrid client, shared series fetcher, per-dataset fetchers
 │   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
-│   └── fmi/          # FMI WFS client and city weather fetcher
+│   ├── fmi/          # FMI WFS client and city weather fetcher
+│   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
+│   └── energy_charts/# Energy-Charts client and Nord Pool spot-price fetcher
 │       └── data/     # Committed 1-day Parquet snapshots for offline runs
 ├── tests/            # Offline unit tests and live API integration tests
 ├── configs/          # (planned) retail contract definitions & household load profiles
@@ -46,7 +48,7 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 ### Prerequisites
 - [`uv`](https://docs.astral.sh/uv/) — manages the Python 3.14 interpreter and the virtualenv.
 - A free Fingrid Open Data API key from [`data.fingrid.fi`](https://data.fingrid.fi) — only needed for live Fingrid data and integration tests.
-- FMI Open Data needs no credentials.
+- FMI Open Data and the Energy-Charts spot-price API need no credentials.
 
 ### 1. Install dependencies
 
@@ -83,7 +85,7 @@ uv run pytest tests/test_fingrid_wind_fetcher.py -q
 uv run pytest tests/test_fingrid_wind_fetcher.py::test_fetch_from_local_reads_bundled_sample
 ```
 
-Unit tests never touch the network: fetcher tests read the committed snapshots under `datasets/fingrid/data/` and `datasets/fmi/data/` (all covering 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. The Fingrid snapshots hold the raw cadence: 96 quarter-hour samples for wind generation, consumption, and each cross-border flow, 24 hourly samples for wind capacity, and 958 roughly-90-second samples for nuclear and hydro. Each FMI snapshot holds 24 hourly rows for one city. Only the integration tests hit the real APIs (a handful of requests, with automatic retry/backoff), so avoid running them in tight loops against the free-tier quota.
+Unit tests never touch the network: fetcher tests read the committed snapshots under `datasets/fingrid/data/`, `datasets/fmi/data/`, and `datasets/energy_charts/data/` (all covering 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. The Fingrid snapshots hold the raw cadence: 96 quarter-hour samples for wind generation, consumption, and each cross-border flow, 24 hourly samples for wind capacity, and 958 roughly-90-second samples for nuclear and hydro. Each FMI snapshot holds 24 hourly rows for one city, and the spot-price snapshot holds 24 hourly FI prices. Only the integration tests hit the real APIs (a handful of requests, with automatic retry/backoff), so avoid running them in tight loops against the free-tier quota.
 
 ### 4. Fetch data from a specific fetcher
 
@@ -171,6 +173,34 @@ Notes:
 - Missing observations become null values in the output table.
 - `fetch_from_local` reads `datasets/fmi/data/<city>_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 
+#### Nord Pool FI spot prices
+
+`NordPoolSpotFetcher` returns hourly day-ahead spot prices as `timestamp_utc` and `spot_price_c_kwh`. It reads the FI bidding zone by default (`bzn="FI"`).
+
+```bash
+uv run python - <<'PY'
+from datetime import UTC, datetime
+
+from datasets import FetchRequest, NordPoolSpotFetcher
+
+request = FetchRequest(
+    start_utc=datetime(2024, 3, 1, tzinfo=UTC),
+    end_utc=datetime(2024, 3, 2, tzinfo=UTC),
+)
+with NordPoolSpotFetcher() as fetcher:
+    table = fetcher.fetch(request)
+print(fetcher.source_name, table.num_rows)
+print(table.slice(0, 3).to_pylist())
+PY
+```
+
+Notes:
+- `sahkonhintatanaan.fi` is offline, so prices come from the Energy-Charts API (`api.energy-charts.info`), which mirrors the ENTSO-E / Nord Pool day-ahead series and needs no API key. Prices are converted from EUR/MWh to `c/kWh` (`EUR/MWh ÷ 10`) and exclude VAT; a consumer spot contract adds VAT and the retailer margin.
+- Any window is a single Energy-Charts request: a 3-year pull returns 26,304 hourly values in roughly two seconds.
+- Energy-Charts data is licensed for private and internal use; see the `license_info` field in API responses.
+- Missing prices become null values in the output table.
+- `fetch_from_local` reads `datasets/energy_charts/data/fi_spot_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
+
 The Phase 1 historical pull (3 years, hourly) loops over the fetchers and writes one Parquet file per series:
 
 ```bash
@@ -193,6 +223,7 @@ from datasets import (
     FingridWindCapacityFetcher,
     FingridWindFetcher,
     FmiWeatherFetcher,
+    NordPoolSpotFetcher,
 )
 
 load_dotenv(".env")
@@ -213,8 +244,13 @@ fingrid_fetchers = (
     FingridEEFlowFetcher(os.environ["FINGRID_API_KEY"]),
 )
 fmi_fetchers = tuple(FmiWeatherFetcher(city) for city in ("helsinki", "vaasa", "oulu"))
+spot_fetcher = NordPoolSpotFetcher()
 
-for source, fetchers in (("fingrid", fingrid_fetchers), ("fmi", fmi_fetchers)):
+for source, fetchers in (
+    ("fingrid", fingrid_fetchers),
+    ("fmi", fmi_fetchers),
+    ("energy_charts", (spot_fetcher,)),
+):
     output_dir = Path("data") / source
     output_dir.mkdir(parents=True, exist_ok=True)
     for fetcher in fetchers:
@@ -229,7 +265,7 @@ for source, fetchers in (("fingrid", fingrid_fetchers), ("fmi", fmi_fetchers)):
 PY
 ```
 
-The FMI leg is slower because FMI caps radiation requests at seven days; expect several minutes and keep the free-tier request volume in mind.
+The FMI leg is slower because FMI caps radiation requests at seven days; a 3-year city takes about five minutes (measured 5.2 minutes for Helsinki over 2022–2024). The spot leg is a single request and finishes in seconds.
 
 ### 5. Add a new fetcher
 
