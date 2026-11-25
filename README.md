@@ -80,7 +80,7 @@ uv run pytest tests/test_fingrid_wind_fetcher.py -q
 uv run pytest tests/test_fingrid_wind_fetcher.py::test_fetch_from_local_reads_bundled_sample
 ```
 
-Unit tests never touch the network: fetcher tests read the committed snapshots under `datasets/fingrid/data/` (all covering 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. The snapshots hold the raw Fingrid cadence: 96 quarter-hour samples for wind generation and consumption, 24 hourly samples for wind capacity, and 958 roughly-90-second samples for nuclear and hydro. Only the integration tests hit the real API (a handful of requests, with automatic 429 retry/backoff), so avoid running them in tight loops against the free-tier quota.
+Unit tests never touch the network: fetcher tests read the committed snapshots under `datasets/fingrid/data/` (all covering 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. The snapshots hold the raw Fingrid cadence: 96 quarter-hour samples for wind generation, consumption, and each cross-border flow, 24 hourly samples for wind capacity, and 958 roughly-90-second samples for nuclear and hydro. Only the integration tests hit the real API (a handful of requests, with automatic 429 retry/backoff), so avoid running them in tight loops against the free-tier quota.
 
 ### 4. Fetch data from a specific fetcher
 
@@ -93,6 +93,9 @@ Each dataset has a fetcher under `datasets/<source>/`. The Fingrid fetchers all 
 | `FingridConsumptionFetcher` | 124 | National electricity consumption (MWh/h ≈ MW) | `consumption_mw` |
 | `FingridNuclearFetcher` | 188 | Nuclear power production | `nuclear_mw` |
 | `FingridHydroFetcher` | 191 | Hydro power production | `hydro_mw` |
+| `FingridSE1FlowFetcher` | 60 | Finland ↔ Northern Sweden flow (positive = export) | `se1_flow_mw` |
+| `FingridSE3FlowFetcher` | 61 | Finland ↔ Central Sweden flow (positive = export) | `se3_flow_mw` |
+| `FingridEEFlowFetcher` | 55 | Finland ↔ Estonia flow (positive = export) | `ee_flow_mw` |
 
 ```bash
 uv run python - <<'PY'
@@ -121,10 +124,11 @@ PY
 
 Notes:
 - Windows are half-open `[start_utc, end_utc)` and must be timezone-aware.
-- Fingrid serves 15-minute consumption samples after 13 June 2023 (hourly before that), 15-minute wind generation after June 2023, and roughly 90-second (formerly 3-minute) real-time nuclear and hydro samples. `resolution="1h"` returns hourly means, `resolution="15min"` aggregates everything into quarter-hours, and the raw cadence is never exposed below `15min`.
+- Fingrid serves 15-minute consumption, wind generation, and cross-border flow samples after 13 June 2023 (hourly before that), and roughly 90-second (formerly 3-minute) real-time nuclear and hydro samples. `resolution="1h"` returns hourly means, `resolution="15min"` aggregates everything into quarter-hours, and the raw cadence is never exposed below `15min`.
+- Flow values follow Fingrid's sign convention: positive is transmission from Finland to the neighbouring zone, negative is import into Finland.
 - Multi-year ranges are paginated automatically and retried on Fingrid rate limits, so a 3-year window only needs one request object.
 - `fetch` always calls the remote API. `fetch_from_local` returns data from the bundled snapshot when it exists and falls back to `fetch` otherwise, so the same request works offline.
-- The bundled snapshots live at `datasets/fingrid/data/` (`wind_sample.parquet`, `wind_capacity_sample.parquet`, `consumption_sample.parquet`, `nuclear_sample.parquet`, `hydro_sample.parquet`) and cover 2024-03-01 only. Override any of them with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
+- The bundled snapshots live at `datasets/fingrid/data/` (`wind_sample.parquet`, `wind_capacity_sample.parquet`, `consumption_sample.parquet`, `nuclear_sample.parquet`, `hydro_sample.parquet`, `se1_flow_sample.parquet`, `se3_flow_sample.parquet`, `ee_flow_sample.parquet`) and cover 2024-03-01 only. Override any of them with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 - Output tables are built against `fetcher.expected_schema`, so `table.schema == fetcher.expected_schema` holds for every fetch.
 - To persist a table, write it to Parquet with pyarrow: `import pyarrow.parquet as pq; pq.write_table(table, "data/wind.parquet")` (create `data/` first).
 
@@ -142,8 +146,11 @@ from dotenv import load_dotenv
 from datasets import (
     FetchRequest,
     FingridConsumptionFetcher,
+    FingridEEFlowFetcher,
     FingridHydroFetcher,
     FingridNuclearFetcher,
+    FingridSE1FlowFetcher,
+    FingridSE3FlowFetcher,
     FingridWindCapacityFetcher,
     FingridWindFetcher,
 )
@@ -163,6 +170,9 @@ fetchers = (
     FingridConsumptionFetcher(os.environ["FINGRID_API_KEY"]),
     FingridNuclearFetcher(os.environ["FINGRID_API_KEY"]),
     FingridHydroFetcher(os.environ["FINGRID_API_KEY"]),
+    FingridSE1FlowFetcher(os.environ["FINGRID_API_KEY"]),
+    FingridSE3FlowFetcher(os.environ["FINGRID_API_KEY"]),
+    FingridEEFlowFetcher(os.environ["FINGRID_API_KEY"]),
 )
 for fetcher in fetchers:
     with fetcher:

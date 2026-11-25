@@ -3,6 +3,11 @@
 from datasets.api import DataSourceFetcher, FetchRequest
 from datasets.fingrid.client import FingridClient
 from datasets.fingrid.consumption import FingridConsumptionFetcher
+from datasets.fingrid.flows import (
+    FingridEEFlowFetcher,
+    FingridSE1FlowFetcher,
+    FingridSE3FlowFetcher,
+)
 from datasets.fingrid.hydro import FingridHydroFetcher
 from datasets.fingrid.nuclear import FingridNuclearFetcher
 from datasets.fingrid.wind import FingridWindFetcher
@@ -13,8 +18,11 @@ __all__ = [
     "FetchRequest",
     "FingridClient",
     "FingridConsumptionFetcher",
+    "FingridEEFlowFetcher",
     "FingridHydroFetcher",
     "FingridNuclearFetcher",
+    "FingridSE1FlowFetcher",
+    "FingridSE3FlowFetcher",
     "FingridWindCapacityFetcher",
     "FingridWindFetcher",
 ]

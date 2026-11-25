@@ -4,7 +4,7 @@
 - [x] Register a free API key on Fingrid Open Data (`data.fingrid.fi`).
 - [x] Fetch 3 years of wind power generation (Dataset `75` for 15-min/hourly historical series, or Dataset `181` for real-time measurements) and wind production capacity (Dataset `268`) via the Fingrid API.
 - [x] Fetch 3 years of national electricity consumption (Dataset `124` for historical 15-min/hourly series, or Dataset `193`), nuclear power (Dataset `188`), and hydro power (Dataset `191`) from Fingrid.
-- [ ] Fetch 3 years of cross-border transmission flows between Finland and `SE1`, `SE3`, and `EE` from Fingrid.
+- [x] Fetch 3 years of cross-border transmission flows between Finland and `SE1`, `SE3`, and `EE` from Fingrid.
 - [ ] Download 3 years of hourly temperature, wind speed, and radiation data from FMI Open Data (`en.ilmatieteenlaitos.fi/open-data`) for Helsinki (Kaisaniemi), Vaasa, and Oulu.
 - [ ] Download 3 years of hourly Nord Pool FI spot prices (`c/kWh`) from `sahkonhintatanaan.fi` or ENTSO-E.
 - [ ] Align and merge all Fingrid (resampling 15-minute series post-June 2023 to hourly means), FMI, and spot price time series onto a single UTC hourly index, interpolating short gaps (< 3 hours) and dropping incomplete boundary rows.
