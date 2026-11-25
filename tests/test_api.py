@@ -33,6 +33,9 @@ def test_public_package_exports_the_api_and_fetchers():
         "DataSourceFetcher",
         "FetchRequest",
         "FingridClient",
+        "FingridConsumptionFetcher",
+        "FingridHydroFetcher",
+        "FingridNuclearFetcher",
         "FingridWindCapacityFetcher",
         "FingridWindFetcher",
     }

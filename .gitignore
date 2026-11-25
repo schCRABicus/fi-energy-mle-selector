@@ -9,3 +9,5 @@ data/.csv
 data/*.parquet
 *.pt
 .ipynb_checkpoints/
+# macOS Finder metadata
+.DS_Store
