@@ -167,6 +167,7 @@ Notes:
 - FMI Open Data requires no API key. Only `resolution="1h"` is supported.
 - Radiation comes from the nearest station with a multi-year record, which is why Vaasa uses Seinäjoki Pelmaa rather than a station inside the city. Values are FMI's one-minute global-radiation sample at the top of each hour (`GLOB_1MIN`, `timestep=60`), not an hourly mean. Small negative values at night are sensor offset and are preserved.
 - FMI caps one WFS request at 31 days for hourly weather and 7 days for radiation, so `FmiClient` chunks long windows automatically. A 3-year radiation pull issues about 157 requests per city and can take minutes.
+- Long downloads show a status tracker with one progress bar per stage (`weather`, `radiation`) on stderr: chunk count, percent, elapsed time, ETA, and observations so far. It is enabled automatically on an interactive terminal; pass `show_progress=True` to force it in logs or `show_progress=False` to silence it.
 - Missing observations become null values in the output table.
 - `fetch_from_local` reads `datasets/fmi/data/<city>_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 

@@ -66,15 +66,31 @@ class StubClient:
         self.closed = False
 
     def iter_weather(
-        self, fmisid: int, start: datetime, end: datetime
+        self,
+        fmisid: int,
+        start: datetime,
+        end: datetime,
+        *,
+        progress=None,
     ) -> list[tuple[datetime, dict[str, float | None]]]:
         self.weather_calls.append((fmisid, start, end))
+        if progress is not None:
+            progress("weather", 0, 1, 0)
+            progress("weather", 1, 1, len(self._weather))
         return list(self._weather)
 
     def iter_radiation(
-        self, fmisid: int, start: datetime, end: datetime
+        self,
+        fmisid: int,
+        start: datetime,
+        end: datetime,
+        *,
+        progress=None,
     ) -> list[tuple[datetime, float | None]]:
         self.radiation_calls.append((fmisid, start, end))
+        if progress is not None:
+            progress("radiation", 0, 1, 0)
+            progress("radiation", 1, 1, len(self._radiation))
         return list(self._radiation)
 
     def close(self) -> None:
@@ -361,6 +377,37 @@ def test_invalid_requests_are_rejected(request_, message):
 
     with pytest.raises(ValueError, match=message):
         fetcher.fetch(request_)
+
+
+def test_fetch_reports_download_progress(capsys):
+    client = StubClient(
+        [(START, {"TA_PT1H_AVG": 2.0})],
+        [(START, 10.0)],
+    )
+    fetcher = FmiWeatherFetcher(
+        "helsinki",
+        client=client,  # type: ignore[arg-type]
+        local_path=None,
+        show_progress=True,
+    )
+
+    fetcher.fetch(FetchRequest(START, END))
+
+    output = capsys.readouterr().err
+    assert "Helsinki: weather Helsinki Kaisaniemi (100971)" in output
+    assert "radiation Helsinki Kumpula (101004)" in output
+    assert "weather" in output
+    assert "radiation" in output
+    assert output.count("done") == 2
+
+
+def test_fetch_progress_is_silent_when_disabled(capsys):
+    client = StubClient([(START, {"TA_PT1H_AVG": 2.0})], [(START, 10.0)])
+    fetcher = make_fetcher("helsinki", local_path=None, client=client)
+
+    fetcher.fetch(FetchRequest(START, END))
+
+    assert capsys.readouterr().err == ""
 
 
 def test_context_manager_closes_client():

@@ -166,6 +166,51 @@ def test_radiation_requests_are_chunked_to_at_most_7_days():
     assert api.requests[1].url.params["endtime"] == "2024-01-09T00:00:00Z"
 
 
+def test_iter_weather_reports_chunk_progress():
+    api = FakeFmiApi([EMPTY_COLLECTION, EMPTY_COLLECTION])
+    events: list[tuple[str, int, int, int]] = []
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+
+    list(
+        make_client(api).iter_weather(
+            100971,
+            start,
+            start + timedelta(days=32),
+            progress=lambda *event: events.append(event),
+        )
+    )
+
+    assert events == [
+        ("weather", 0, 2, 0),
+        ("weather", 1, 2, 0),
+        ("weather", 2, 2, 0),
+    ]
+
+
+def test_iter_radiation_reports_chunk_progress_with_observation_count():
+    api = FakeFmiApi([
+        feature_collection(element("2024-01-01T00:00:00Z", "GLOB_1MIN", "1.0")),
+        feature_collection(element("2024-01-08T00:00:00Z", "GLOB_1MIN", "2.0")),
+    ])
+    events: list[tuple[str, int, int, int]] = []
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+
+    list(
+        make_client(api).iter_radiation(
+            101004,
+            start,
+            start + timedelta(days=8),
+            progress=lambda *event: events.append(event),
+        )
+    )
+
+    assert events == [
+        ("radiation", 0, 2, 0),
+        ("radiation", 1, 2, 1),
+        ("radiation", 2, 2, 2),
+    ]
+
+
 def test_chunk_boundaries_do_not_duplicate_observations():
     api = FakeFmiApi([
         feature_collection(element("2024-01-08T00:00:00Z", "GLOB_1MIN", "1.0")),

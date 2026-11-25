@@ -10,6 +10,7 @@ import httpx
 from tenacity import RetryCallState
 
 from datasets.http_client import HttpClient
+from datasets.progress import ChunkProgress
 from datasets.utils import utc_window
 
 FMI_API_BASE_URL = "https://opendata.fmi.fi/"
@@ -52,7 +53,12 @@ class FmiClient(HttpClient):
         )
 
     def iter_weather(
-        self, fmisid: int, start: datetime, end: datetime
+        self,
+        fmisid: int,
+        start: datetime,
+        end: datetime,
+        *,
+        progress: ChunkProgress | None = None,
     ) -> Iterator[tuple[datetime, dict[str, float | None]]]:
         """
         Yield hourly weather observations as ``(timestamp_utc, values)``.
@@ -60,9 +66,16 @@ class FmiClient(HttpClient):
         ``values`` maps the FMI parameter names ``TA_PT1H_AVG`` and
         ``WS_PT1H_AVG`` to their readings. A parameter missing from an
         observation is simply absent from the mapping.
+
+        ``progress`` is called before the first request and after every chunk
+        with ``(stage, completed_chunks, total_chunks, observations)``.
         """
         start, end = utc_window(start, end)
-        for chunk_start, chunk_end in _iter_chunks(start, end, WEATHER_CHUNK_DAYS):
+        chunks = list(_iter_chunks(start, end, WEATHER_CHUNK_DAYS))
+        observations = 0
+        _report(progress, "weather", 0, len(chunks), observations)
+
+        for completed, (chunk_start, chunk_end) in enumerate(chunks, start=1):
             rows: dict[datetime, dict[str, float | None]] = {}
             elements = self._get_elements(
                 stored_query=WEATHER_STORED_QUERY,
@@ -77,20 +90,33 @@ class FmiClient(HttpClient):
                 if chunk_start <= timestamp < chunk_end:
                     rows.setdefault(timestamp, {})[parameter] = value
 
+            observations += len(rows)
+            _report(progress, "weather", completed, len(chunks), observations)
             for timestamp in sorted(rows):
                 yield timestamp, rows[timestamp]
 
     def iter_radiation(
-        self, fmisid: int, start: datetime, end: datetime
+        self,
+        fmisid: int,
+        start: datetime,
+        end: datetime,
+        *,
+        progress: ChunkProgress | None = None,
     ) -> Iterator[tuple[datetime, float | None]]:
         """
         Yield hourly global-radiation samples as ``(timestamp_utc, W/m²)``.
 
         FMI's radiation archive stores one-minute samples, so ``timestep=60``
         returns the sample at the top of each hour rather than an hourly mean.
+
+        ``progress`` behaves as in :meth:`iter_weather` with stage ``radiation``.
         """
         start, end = utc_window(start, end)
-        for chunk_start, chunk_end in _iter_chunks(start, end, RADIATION_CHUNK_DAYS):
+        chunks = list(_iter_chunks(start, end, RADIATION_CHUNK_DAYS))
+        observations = 0
+        _report(progress, "radiation", 0, len(chunks), observations)
+
+        for completed, (chunk_start, chunk_end) in enumerate(chunks, start=1):
             values: dict[datetime, float | None] = {}
             elements = self._get_elements(
                 stored_query=RADIATION_STORED_QUERY,
@@ -106,6 +132,8 @@ class FmiClient(HttpClient):
                 if chunk_start <= timestamp < chunk_end:
                     values[timestamp] = value
 
+            observations += len(values)
+            _report(progress, "radiation", completed, len(chunks), observations)
             for item in sorted(values.items()):
                 yield item
 
@@ -134,6 +162,17 @@ class FmiClient(HttpClient):
 
         xml = self.get_text(WFS_PATH, params=params)
         yield from _parse_elements(xml)
+
+
+def _report(
+    progress: ChunkProgress | None,
+    stage: str,
+    completed: int,
+    total: int,
+    observations: int,
+) -> None:
+    if progress is not None:
+        progress(stage, completed, total, observations)
 
 
 def _iter_chunks(

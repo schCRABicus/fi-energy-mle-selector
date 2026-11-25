@@ -11,6 +11,7 @@ import pyarrow as pa
 
 from datasets.api import FetchRequest
 from datasets.fmi.client import FmiClient
+from datasets.progress import ChunkProgress, DownloadTracker
 from datasets.utils import iter_local_samples, mean_by_bucket, resolution_step, utc_window
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -117,11 +118,13 @@ class FmiWeatherFetcher:
         local_path: str | Path | None | object = _DEFAULT_LOCAL_PATH,
         timeout: float = 60.0,
         max_retries: int = 5,
+        show_progress: bool | None = None,
     ) -> None:
         self._station = station_for_city(city)
         if local_path is _DEFAULT_LOCAL_PATH:
             local_path = DEFAULT_LOCAL_PATHS[self._station.key]
         self._local_path = None if local_path is None else Path(local_path)
+        self._show_progress = show_progress
         self._client = client or FmiClient(timeout=timeout, max_retries=max_retries)
 
     @property
@@ -135,7 +138,9 @@ class FmiWeatherFetcher:
     def fetch(self, request: FetchRequest) -> pa.Table:
         start, end = utc_window(request.start_utc, request.end_utc)
         resolution_step(self.RESOLUTIONS, request.resolution)
-        return self._build_table(self._remote_rows(start, end))
+        with self._progress_tracker() as tracker:
+            rows = self._remote_rows(start, end, progress=tracker.stage)
+        return self._build_table(rows)
 
     def fetch_from_local(self, request: FetchRequest) -> pa.Table:
         start, end = utc_window(request.start_utc, request.end_utc)
@@ -143,7 +148,9 @@ class FmiWeatherFetcher:
 
         local_path = self._local_path
         if local_path is None or not local_path.exists():
-            return self._build_table(self._remote_rows(start, end))
+            with self._progress_tracker() as tracker:
+                rows = self._remote_rows(start, end, progress=tracker.stage)
+            return self._build_table(rows)
 
         rows: dict[datetime, dict[str, float]] = {}
         for column in VALUE_COLUMNS:
@@ -166,11 +173,17 @@ class FmiWeatherFetcher:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def _remote_rows(self, start: datetime, end: datetime) -> list[dict[str, object]]:
+    def _remote_rows(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        progress: ChunkProgress | None = None,
+    ) -> list[dict[str, object]]:
         rows: dict[datetime, dict[str, float | None]] = {}
 
         for timestamp, values in self._client.iter_weather(
-            self._station.weather_fmisid, start, end
+            self._station.weather_fmisid, start, end, progress=progress
         ):
             if start <= timestamp < end:
                 row = rows.setdefault(timestamp, {})
@@ -178,12 +191,20 @@ class FmiWeatherFetcher:
                     row[column] = values.get(parameter)
 
         for timestamp, value in self._client.iter_radiation(
-            self._station.radiation_fmisid, start, end
+            self._station.radiation_fmisid, start, end, progress=progress
         ):
             if start <= timestamp < end:
                 rows.setdefault(timestamp, {})["radiation_wm2"] = value
 
         return _table_rows(rows)
+
+    def _progress_tracker(self) -> DownloadTracker:
+        station = self._station
+        title = (
+            f"{station.city}: weather {station.weather_name} ({station.weather_fmisid}), "
+            f"radiation {station.radiation_name} ({station.radiation_fmisid})"
+        )
+        return DownloadTracker(title, enabled=self._show_progress)
 
     def _build_table(self, rows: list[dict[str, object]]) -> pa.Table:
         return pa.Table.from_pydict(
