@@ -35,6 +35,7 @@ class FingridNuclearFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
+            dataset_name="nuclear_production",
             value_column="nuclear_mw",
             schema=NUCLEAR_SCHEMA,
             local_path=local_path,

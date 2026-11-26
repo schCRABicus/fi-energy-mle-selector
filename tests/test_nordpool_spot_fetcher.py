@@ -77,6 +77,7 @@ def test_source_name_and_schema():
     fetcher = make_fetcher()
 
     assert fetcher.source_name == "nordpool_spot_fi"
+    assert fetcher.dataset_name == "spot_price_fi"
     assert fetcher.expected_schema == SPOT_PRICE_SCHEMA
     assert fetcher.expected_schema.names == ["timestamp_utc", "spot_price_c_kwh"]
     assert fetcher.expected_schema.field("timestamp_utc").type == pa.timestamp("us", tz="UTC")
@@ -85,6 +86,7 @@ def test_source_name_and_schema():
 
 def test_non_default_bidding_zone_changes_source_name():
     assert make_fetcher(bzn="se1").source_name == "nordpool_spot_se1"
+    assert make_fetcher(bzn="se1").dataset_name == "spot_price_se1"
 
 
 def test_fetch_converts_eur_per_mwh_to_c_per_kwh():

@@ -7,7 +7,8 @@
 - [x] Fetch 3 years of cross-border transmission flows between Finland and `SE1`, `SE3`, and `EE` from Fingrid.
 - [x] Download 3 years of hourly temperature, wind speed, and radiation data from FMI Open Data (`en.ilmatieteenlaitos.fi/open-data`) for Helsinki (Kaisaniemi), Vaasa, and Oulu.
 - [x] Download 3 years of hourly Nord Pool FI spot prices (`c/kWh`) via the Energy-Charts API (ENTSO-E / Nord Pool data); `sahkonhintatanaan.fi` is offline and ENTSO-E's own API needs a token.
-- [ ] Align and merge all Fingrid (resampling 15-minute series post-June 2023 to hourly means), FMI, and spot price time series onto a single UTC hourly index, interpolating short gaps (< 3 hours) and dropping incomplete boundary rows.
+- [x] Align and merge all Fingrid (15-minute series post-June 2023 resampled to hourly means), FMI, and spot price time series onto a single UTC hourly index and save the full pull via `scripts/fetch_all.py` (gaps preserved as nulls).
+- [ ] Interpolate short gaps (< 3 hours) and drop incomplete boundary rows from the aligned dataset.
 
 ## Phase 2: Feature Engineering (24-Feature Pipeline)
 - [ ] Compute grid ratio features: `wind_penetration_ratio` (`wind_mw / consumption_mw`) and `wind_capacity_factor` (`wind_mw / wind_capacity_mw`).

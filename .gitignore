@@ -5,8 +5,7 @@ __pycache__/
 venv/
 .env
 .idea/
-data/.csv
-data/*.parquet
+/data/
 *.pt
 .ipynb_checkpoints/
 # macOS Finder metadata

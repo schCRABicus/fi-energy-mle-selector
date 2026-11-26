@@ -61,6 +61,10 @@ class NordPoolSpotFetcher:
         return f"nordpool_spot_{self._bzn.lower()}"
 
     @property
+    def dataset_name(self) -> str:
+        return f"spot_price_{self._bzn.lower()}"
+
+    @property
     def expected_schema(self) -> pa.Schema:
         return SPOT_PRICE_SCHEMA
 

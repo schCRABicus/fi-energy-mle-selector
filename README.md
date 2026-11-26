@@ -27,6 +27,7 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │   ├── api.py        # FetchRequest and DataSourceFetcher protocol
 │   ├── http_client.py# HTTP client with retries (httpx + tenacity)
 │   ├── utils.py      # Window validation, resampling, local Parquet loading
+│   ├── alignment.py  # UTC hourly-grid validation and outer-join
 │   ├── fingrid/      # Fingrid client, shared series fetcher, per-dataset fetchers
 │   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
 │   ├── fmi/          # FMI WFS client and city weather fetcher
@@ -34,8 +35,9 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │   └── energy_charts/# Energy-Charts client and Nord Pool spot-price fetcher
 │       └── data/     # Committed 1-day Parquet snapshots for offline runs
 ├── tests/            # Offline unit tests and live API integration tests
+├── scripts/          # Reproducible data pipelines (full Phase 1 pull)
 ├── configs/          # (planned) retail contract definitions & household load profiles
-├── data/             # (planned) raw and processed hourly datasets (git-ignored)
+├── data/             # Full downloaded hourly datasets and manifest (git-ignored)
 ├── src/              # (planned) feature engineering, PyTorch MLE models, simulator
 ├── pyproject.toml    # Project metadata, dependencies, pytest configuration
 ├── uv.lock           # Locked dependency versions
@@ -91,16 +93,16 @@ Unit tests never touch the network: fetcher tests read the committed snapshots u
 
 Each dataset has a fetcher under `datasets/<source>/`. The Fingrid fetchers all share the same constructor and request API; swap the class name in the snippet below.
 
-| Fetcher | Dataset | Series | Output column |
-| --- | --- | --- | --- |
-| `FingridWindFetcher` | 75 | Wind power generation | `wind_mw` |
-| `FingridWindCapacityFetcher` | 268 | Installed wind capacity | `wind_capacity_mw` |
-| `FingridConsumptionFetcher` | 124 | National electricity consumption (MWh/h ≈ MW) | `consumption_mw` |
-| `FingridNuclearFetcher` | 188 | Nuclear power production | `nuclear_mw` |
-| `FingridHydroFetcher` | 191 | Hydro power production | `hydro_mw` |
-| `FingridSE1FlowFetcher` | 60 | Finland ↔ Northern Sweden flow (positive = export) | `se1_flow_mw` |
-| `FingridSE3FlowFetcher` | 61 | Finland ↔ Central Sweden flow (positive = export) | `se3_flow_mw` |
-| `FingridEEFlowFetcher` | 55 | Finland ↔ Estonia flow (positive = export) | `ee_flow_mw` |
+| Fetcher | Dataset | Series | Output column | Saved name |
+| --- | --- | --- | --- | --- |
+| `FingridWindFetcher` | 75 | Wind power generation | `wind_mw` | `wind_production` |
+| `FingridWindCapacityFetcher` | 268 | Installed wind capacity | `wind_capacity_mw` | `wind_capacity` |
+| `FingridConsumptionFetcher` | 124 | National electricity consumption (MWh/h ≈ MW) | `consumption_mw` | `electricity_consumption` |
+| `FingridNuclearFetcher` | 188 | Nuclear power production | `nuclear_mw` | `nuclear_production` |
+| `FingridHydroFetcher` | 191 | Hydro power production | `hydro_mw` | `hydro_production` |
+| `FingridSE1FlowFetcher` | 60 | Finland ↔ Northern Sweden flow (positive = export) | `se1_flow_mw` | `se1_flow` |
+| `FingridSE3FlowFetcher` | 61 | Finland ↔ Central Sweden flow (positive = export) | `se3_flow_mw` | `se3_flow` |
+| `FingridEEFlowFetcher` | 55 | Finland ↔ Estonia flow (positive = export) | `ee_flow_mw` | `ee_flow` |
 
 ```bash
 uv run python - <<'PY'
@@ -201,69 +203,43 @@ Notes:
 - Missing prices become null values in the output table.
 - `fetch_from_local` reads `datasets/energy_charts/data/fi_spot_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 
-The Phase 1 historical pull (3 years, hourly) loops over the fetchers and writes one Parquet file per series:
+#### Full Phase 1 pull
+
+[`scripts/fetch_all.py`](scripts/fetch_all.py) fetches every series over one shared UTC hourly window (three years ending at the current complete hour by default), verifies that each table sits on the same hourly grid, and saves each run under `data/<window>/`:
+
+```text
+data/
+└── 3y/
+    ├── manifest.json
+    ├── fingrid/
+    │   ├── wind_production.parquet
+    │   ├── wind_capacity.parquet
+    │   ├── electricity_consumption.parquet
+    │   ├── nuclear_production.parquet
+    │   ├── hydro_production.parquet
+    │   ├── se1_flow.parquet
+    │   ├── se3_flow.parquet
+    │   └── ee_flow.parquet
+    ├── fmi/
+    │   ├── helsinki_weather.parquet
+    │   ├── vaasa_weather.parquet
+    │   └── oulu_weather.parquet
+    ├── energy_charts/spot_price_fi.parquet
+    └── combined/hourly.parquet  # every window hour, all series outer-joined
+```
+
+The window directory is `3y` for a three-calendar-year window, or the exact hour count such as `24h` for other ranges. Dataset filenames are purpose-based; the manifest keeps the fetcher lineage (e.g. `fingrid_75`) alongside the clear name.
 
 ```bash
-uv run python - <<'PY'
-import os
-from datetime import UTC, datetime
-from pathlib import Path
-
-import pyarrow.parquet as pq
-from dotenv import load_dotenv
-
-from datasets import (
-    FetchRequest,
-    FingridConsumptionFetcher,
-    FingridEEFlowFetcher,
-    FingridHydroFetcher,
-    FingridNuclearFetcher,
-    FingridSE1FlowFetcher,
-    FingridSE3FlowFetcher,
-    FingridWindCapacityFetcher,
-    FingridWindFetcher,
-    FmiWeatherFetcher,
-    NordPoolSpotFetcher,
-)
-
-load_dotenv(".env")
-
-request = FetchRequest(
-    start_utc=datetime(2022, 1, 1, tzinfo=UTC),
-    end_utc=datetime(2025, 1, 1, tzinfo=UTC),
-    resolution="1h",
-)
-fingrid_fetchers = (
-    FingridWindFetcher(os.environ["FINGRID_API_KEY"]),
-    FingridWindCapacityFetcher(os.environ["FINGRID_API_KEY"]),
-    FingridConsumptionFetcher(os.environ["FINGRID_API_KEY"]),
-    FingridNuclearFetcher(os.environ["FINGRID_API_KEY"]),
-    FingridHydroFetcher(os.environ["FINGRID_API_KEY"]),
-    FingridSE1FlowFetcher(os.environ["FINGRID_API_KEY"]),
-    FingridSE3FlowFetcher(os.environ["FINGRID_API_KEY"]),
-    FingridEEFlowFetcher(os.environ["FINGRID_API_KEY"]),
-)
-fmi_fetchers = tuple(FmiWeatherFetcher(city) for city in ("helsinki", "vaasa", "oulu"))
-spot_fetcher = NordPoolSpotFetcher()
-
-for source, fetchers in (
-    ("fingrid", fingrid_fetchers),
-    ("fmi", fmi_fetchers),
-    ("energy_charts", (spot_fetcher,)),
-):
-    output_dir = Path("data") / source
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for fetcher in fetchers:
-        with fetcher:
-            table = fetcher.fetch(request)
-        pq.write_table(
-            table,
-            output_dir / f"{fetcher.source_name}.parquet",
-            compression="zstd",
-        )
-        print(fetcher.source_name, table.num_rows)
-PY
+uv run python scripts/fetch_all.py
+uv run python scripts/fetch_all.py --skip-existing            # resume
+uv run python scripts/fetch_all.py --start 2023-01-01 --end 2026-01-01
+uv run python scripts/fetch_all.py --years 2 --output-dir /tmp/fi-energy
 ```
+
+Bounds are ISO timestamps, interpreted as UTC when no offset is given, and rounded down to the hour. `--end` defaults to the current UTC hour, `--start` defaults to `--years` (3) before the end, and the window is half-open `[start_utc, end_utc)`. `--output-dir` is the base directory; each run writes to `<output-dir>/<window>/`. `--skip-existing` reuses a source Parquet file that already exists for the window, which resumes an interrupted pull; `--no-combined` skips `combined/hourly.parquet`.
+
+The script exits immediately if `FINGRID_API_KEY` is missing. Individual source failures are recorded and the run continues; a partial run exits with status 1, writes `manifest.json` with the `failures` list, and skips the combined table. Every source table is checked for exact UTC hourly timestamps, duplicate timestamps, and rows outside the window. The combined table contains every hour in the window; missing observations become nulls for that source's columns (no interpolation yet), and FMI columns are prefixed by city (`helsinki_temperature_c`, etc.). `datasets/alignment.py` provides the reusable `trailing_window`, `hourly_index`, `validate_hourly_table`, and `align_hourly` helpers.
 
 The FMI leg is slower because FMI caps radiation requests at seven days; a 3-year city takes about five minutes (measured 5.2 minutes for Helsinki over 2022–2024). The spot leg is a single request and finishes in seconds.
 

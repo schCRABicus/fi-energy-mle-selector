@@ -75,6 +75,12 @@ CASES = [
     ),
 ]
 
+DATASET_NAMES = {
+    60: "se1_flow",
+    61: "se3_flow",
+    55: "ee_flow",
+}
+
 DEFAULT_LOCAL_PATHS = {
     60: flows.DEFAULT_SE1_LOCAL_PATH,
     61: flows.DEFAULT_SE3_LOCAL_PATH,
@@ -142,6 +148,7 @@ def test_source_name_and_schema(case):
     fetcher = make_fetcher(case, None)
 
     assert fetcher.source_name == f"fingrid_{case.dataset_id}"
+    assert fetcher.dataset_name == DATASET_NAMES[case.dataset_id]
     assert fetcher.expected_schema.names == ["timestamp_utc", case.value_column]
 
 

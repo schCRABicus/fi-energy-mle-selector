@@ -76,6 +76,7 @@ def test_fetcher_satisfies_datasource_protocol():
 
 def test_source_name_is_fingrid_268():
     assert make_fetcher(None).source_name == "fingrid_268"
+    assert make_fetcher(None).dataset_name == "wind_capacity"
 
 
 def test_expected_schema_uses_capacity_column():

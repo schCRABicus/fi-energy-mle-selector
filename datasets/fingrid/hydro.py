@@ -35,6 +35,7 @@ class FingridHydroFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
+            dataset_name="hydro_production",
             value_column="hydro_mw",
             schema=HYDRO_SCHEMA,
             local_path=local_path,

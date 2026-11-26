@@ -56,6 +56,7 @@ class FingridSE1FlowFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
+            dataset_name="se1_flow",
             value_column="se1_flow_mw",
             schema=SE1_FLOW_SCHEMA,
             local_path=local_path,
@@ -86,6 +87,7 @@ class FingridSE3FlowFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
+            dataset_name="se3_flow",
             value_column="se3_flow_mw",
             schema=SE3_FLOW_SCHEMA,
             local_path=local_path,
@@ -116,6 +118,7 @@ class FingridEEFlowFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
+            dataset_name="ee_flow",
             value_column="ee_flow_mw",
             schema=EE_FLOW_SCHEMA,
             local_path=local_path,

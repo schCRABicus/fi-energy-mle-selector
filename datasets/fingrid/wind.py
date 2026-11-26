@@ -35,6 +35,7 @@ class FingridWindFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
+            dataset_name="wind_production",
             value_column="wind_mw",
             schema=WIND_SCHEMA,
             local_path=local_path,

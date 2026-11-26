@@ -27,6 +27,11 @@ class DataSourceFetcher(Protocol):
         ...
 
     @property
+    def dataset_name(self) -> str:
+        """Clear, purpose-based dataset name used for saved artifacts (e.g. 'wind_production')."""
+        ...
+
+    @property
     def expected_schema(self) -> pa.Schema:
         """
         Strict PyArrow schema enforced on output.

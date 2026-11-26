@@ -132,6 +132,10 @@ class FmiWeatherFetcher:
         return f"fmi_weather_{self._station.key}"
 
     @property
+    def dataset_name(self) -> str:
+        return f"{self._station.key}_weather"
+
+    @property
     def expected_schema(self) -> pa.Schema:
         return WEATHER_SCHEMA
 

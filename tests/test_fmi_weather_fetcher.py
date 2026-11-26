@@ -145,6 +145,7 @@ def test_source_name_and_schema(city, expected_values):
     fetcher = make_fetcher(city)
 
     assert fetcher.source_name == f"fmi_weather_{city}"
+    assert fetcher.dataset_name == f"{city}_weather"
     assert fetcher.expected_schema.names == [
         "timestamp_utc",
         "temperature_c",

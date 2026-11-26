@@ -54,6 +54,12 @@ CASES = [
     ),
 ]
 
+DATASET_NAMES = {
+    124: "electricity_consumption",
+    188: "nuclear_production",
+    191: "hydro_production",
+}
+
 
 class StubClient:
     """Remote client that returns a fixed sample set and records calls."""
@@ -125,6 +131,7 @@ def test_source_name_and_schema(
     fetcher = make_fetcher(fetcher_class, None)
 
     assert fetcher.source_name == f"fingrid_{dataset_id}"
+    assert fetcher.dataset_name == DATASET_NAMES[dataset_id]
     assert fetcher.expected_schema.names == ["timestamp_utc", value_column]
 
 

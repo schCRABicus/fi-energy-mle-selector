@@ -79,6 +79,10 @@ def test_source_name_uses_dataset_id():
     )
 
 
+def test_dataset_name_describes_the_series():
+    assert make_fetcher(None).dataset_name == "wind_production"
+
+
 def test_bundled_sample_is_available():
     assert DEFAULT_LOCAL_PATH == BUNDLED_SAMPLE
     assert DEFAULT_LOCAL_PATH.is_file()

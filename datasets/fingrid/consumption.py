@@ -37,6 +37,7 @@ class FingridConsumptionFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
+            dataset_name="electricity_consumption",
             value_column="consumption_mw",
             schema=CONSUMPTION_SCHEMA,
             local_path=local_path,

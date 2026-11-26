@@ -35,6 +35,7 @@ class FingridWindCapacityFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
+            dataset_name="wind_capacity",
             value_column="wind_capacity_mw",
             schema=CAPACITY_SCHEMA,
             local_path=local_path,

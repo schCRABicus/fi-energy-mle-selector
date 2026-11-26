@@ -33,6 +33,7 @@ class FingridSeriesFetcher:
         api_key: str,
         *,
         dataset_id: int,
+        dataset_name: str | None = None,
         value_column: str,
         schema: pa.Schema,
         local_path: str | Path | None,
@@ -41,6 +42,7 @@ class FingridSeriesFetcher:
         max_retries: int = 5,
     ) -> None:
         self._dataset_id = dataset_id
+        self._dataset_name = dataset_name
         self._value_column = value_column
         self._schema = schema
         self._client = client or FingridClient(
@@ -51,6 +53,10 @@ class FingridSeriesFetcher:
     @property
     def source_name(self) -> str:
         return f"fingrid_{self._dataset_id}"
+
+    @property
+    def dataset_name(self) -> str:
+        return self._dataset_name or self.source_name
 
     @property
     def expected_schema(self) -> pa.Schema:
