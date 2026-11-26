@@ -7,7 +7,10 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +48,10 @@ from datasets.alignment import (
 from datasets.utils import utc_window
 
 FMI_CITIES = ("helsinki", "vaasa", "oulu")
+
+# Fingrid's free tier rate-limits bursts, so keep its series serial; FMI
+# handles the three city pulls comfortably, and Energy-Charts is one request.
+GROUP_LIMITS = {"fingrid": 1, "fmi": 3, "energy_charts": 1}
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,6 +101,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=4,
+        help=(
+            "Maximum concurrent source fetches (default: 4). Per-group caps "
+            "keep Fingrid serial for its free-tier rate limit and allow up to "
+            "three FMI cities at once. Use 1 for a fully sequential pull with "
+            "FMI progress bars."
+        ),
+    )
+    parser.add_argument(
         "--no-combined",
         action="store_true",
         help="Skip the aligned combined/hourly.parquet table.",
@@ -103,6 +121,8 @@ def parse_args() -> argparse.Namespace:
 
 def build_groups(
     api_key: str,
+    *,
+    show_fmi_progress: bool,
 ) -> list[tuple[str, list[DataSourceFetcher]]]:
     fingrid: list[DataSourceFetcher] = [
         FingridWindFetcher(api_key),
@@ -115,13 +135,220 @@ def build_groups(
         FingridEEFlowFetcher(api_key),
     ]
     fmi: list[DataSourceFetcher] = [
-        FmiWeatherFetcher(city, show_progress=True) for city in FMI_CITIES
+        FmiWeatherFetcher(city, show_progress=show_fmi_progress)
+        for city in FMI_CITIES
     ]
     return [
         ("fingrid", fingrid),
         ("fmi", fmi),
         ("energy_charts", [NordPoolSpotFetcher()]),
     ]
+
+
+@dataclass(frozen=True)
+class SourceTask:
+    order: int
+    group: str
+    fetcher: DataSourceFetcher
+    path: Path
+    reused: bool
+
+
+@dataclass(frozen=True)
+class SourceResult:
+    task: SourceTask
+    table: pa.Table | None
+    entry: dict[str, Any] | None
+    error: str | None
+    seconds: float
+
+
+_PRINT_LOCK = threading.Lock()
+_WINDOW_START_KEY = b"fi_energy.window_start_utc"
+_WINDOW_END_KEY = b"fi_energy.window_end_utc"
+
+
+def _file_matches_window(path: Path, start: datetime, end: datetime) -> bool:
+    """A reused file must have been written for exactly this window."""
+    if not path.exists():
+        return False
+    try:
+        metadata = pq.read_schema(path).metadata or {}
+    except Exception:  # noqa: BLE001 - treat an unreadable file as stale
+        return False
+    return (
+        metadata.get(_WINDOW_START_KEY) == _iso(start).encode("ascii")
+        and metadata.get(_WINDOW_END_KEY) == _iso(end).encode("ascii")
+    )
+
+
+def _with_window_metadata(
+    table: pa.Table, start: datetime, end: datetime
+) -> pa.Table:
+    metadata = dict(table.schema.metadata or {})
+    metadata[_WINDOW_START_KEY] = _iso(start).encode("ascii")
+    metadata[_WINDOW_END_KEY] = _iso(end).encode("ascii")
+    return table.replace_schema_metadata(metadata)
+
+
+def _log(message: str, *, error: bool = False) -> None:
+    with _PRINT_LOCK:
+        print(message, file=sys.stderr if error else sys.stdout, flush=True)
+
+
+def _fetch_source(
+    task: SourceTask,
+    *,
+    request: FetchRequest,
+    start: datetime,
+    end: datetime,
+    expected_hours: int,
+    total: int,
+    limits: dict[str, threading.Semaphore],
+) -> SourceResult:
+    dataset_name = task.fetcher.dataset_name
+    with limits[task.group]:
+        _log(
+            f"[{task.order}/{total}] {dataset_name} "
+            f"({'reusing' if task.reused else 'fetching'}) ..."
+        )
+        began = time.monotonic()
+        reused = task.reused
+        try:
+            with task.fetcher:
+                if reused:
+                    try:
+                        table = pq.read_table(task.path)
+                    except Exception:  # noqa: BLE001 - refetch a damaged file
+                        table = task.fetcher.fetch(request)
+                        reused = False
+                else:
+                    table = task.fetcher.fetch(request)
+
+            _require_expected_schema(task.fetcher, table)
+            validate_hourly_table(table, start=start, end=end, label=dataset_name)
+
+            if not reused:
+                task.path.parent.mkdir(parents=True, exist_ok=True)
+                pq.write_table(
+                    _with_window_metadata(table, start, end),
+                    task.path,
+                    compression="zstd",
+                )
+
+            elapsed = time.monotonic() - began
+            entry = {
+                "source": dataset_name,
+                "lineage": task.fetcher.source_name,
+                "group": task.group,
+                "path": f"{task.group}/{task.path.name}",
+                "reused": reused,
+                "seconds": round(elapsed, 2),
+                **_coverage(table, expected_hours=expected_hours),
+            }
+            return SourceResult(
+                task=task,
+                table=table,
+                entry=entry,
+                error=None,
+                seconds=round(elapsed, 2),
+            )
+        except Exception as exc:  # noqa: BLE001 - report every source and continue
+            elapsed = time.monotonic() - began
+            return SourceResult(
+                task=task,
+                table=None,
+                entry=None,
+                error=f"{type(exc).__name__}: {exc}",
+                seconds=round(elapsed, 2),
+            )
+
+
+def _run_tasks(
+    tasks: list[SourceTask],
+    *,
+    request: FetchRequest,
+    start: datetime,
+    end: datetime,
+    expected_hours: int,
+    workers: int,
+) -> list[SourceResult]:
+    total = len(tasks)
+    limits: dict[str, threading.Semaphore] = {}
+    for task in tasks:
+        limits.setdefault(
+            task.group,
+            threading.Semaphore(GROUP_LIMITS.get(task.group, 1)),
+        )
+
+    # Start the independently slow groups first so a serial Fingrid pull does
+    # not occupy the workers while the FMI cities are still queued.
+    scheduled = sorted(
+        tasks, key=lambda task: (task.group == "fingrid", task.order)
+    )
+    results: list[SourceResult] = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(
+                _fetch_source,
+                task,
+                request=request,
+                start=start,
+                end=end,
+                expected_hours=expected_hours,
+                total=total,
+                limits=limits,
+            )
+            for task in scheduled
+        ]
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            if result.error is None:
+                entry = result.entry
+                assert entry is not None
+                _log(
+                    f"  [{result.task.order}/{total}] {entry['source']}  "
+                    f"{entry['rows']:,} rows  "
+                    f"missing {entry['missing_hours']:,}  "
+                    f"nulls {_total_nulls(entry)}  "
+                    f"{result.seconds:.1f}s"
+                    f"{' reused' if result.entry['reused'] else ''}"
+                )
+            else:
+                _log(
+                    f"  [{result.task.order}/{total}] "
+                    f"{result.task.fetcher.dataset_name} FAILED after "
+                    f"{result.seconds:.1f}s: {result.error}",
+                    error=True,
+                )
+    results.sort(key=lambda result: result.task.order)
+    return results
+
+
+def _build_tasks(
+    groups: list[tuple[str, list[DataSourceFetcher]]],
+    window_dir: Path,
+    *,
+    skip_existing: bool,
+    start: datetime,
+    end: datetime,
+) -> list[SourceTask]:
+    tasks: list[SourceTask] = []
+    for group, fetchers in groups:
+        for fetcher in fetchers:
+            path = window_dir / group / f"{fetcher.dataset_name}.parquet"
+            tasks.append(SourceTask(
+                order=len(tasks) + 1,
+                group=group,
+                fetcher=fetcher,
+                path=path,
+                reused=(
+                    skip_existing
+                    and _file_matches_window(path, start, end)
+                ),
+            ))
+    return tasks
 
 
 def main() -> int:
@@ -135,6 +362,8 @@ def main() -> int:
 
     if args.years < 1:
         raise SystemExit("--years must be at least 1.")
+    if args.jobs < 1:
+        raise SystemExit("--jobs must be at least 1.")
 
     end = args.end or trailing_window(years=args.years)[1]
     start = args.start or trailing_window(end, years=args.years)[0]
@@ -146,86 +375,52 @@ def main() -> int:
 
     output_dir = args.output_dir.expanduser().resolve()
     request = FetchRequest(start_utc=start, end_utc=end, resolution="1h")
-    groups = build_groups(api_key)
+    groups = build_groups(api_key, show_fmi_progress=args.jobs == 1)
     total = sum(len(fetchers) for _, fetchers in groups)
     label = window_label(start, end)
     window_dir = output_dir / label
     window_dir.mkdir(parents=True, exist_ok=True)
+    workers = min(args.jobs, total)
     print(
         f"window {_iso(start)} -> {_iso(end)}  [{label}]  "
-        f"({len(index):,} hourly slots, {total} series)",
+        f"({len(index):,} hourly slots, {total} series, {workers} worker(s))",
         flush=True,
+    )
+
+    tasks = _build_tasks(
+        groups,
+        window_dir,
+        skip_existing=args.skip_existing,
+        start=start,
+        end=end,
+    )
+    results = _run_tasks(
+        tasks,
+        request=request,
+        start=start,
+        end=end,
+        expected_hours=len(index),
+        workers=workers,
     )
 
     saved: list[dict[str, Any]] = []
     aligned_tables: dict[str, pa.Table] = {}
     failures: list[dict[str, str]] = []
-    completed = 0
-
-    for group, fetchers in groups:
-        for fetcher in fetchers:
-            completed += 1
-            dataset_name = fetcher.dataset_name
-            filename = f"{dataset_name}.parquet"
-            path = window_dir / group / filename
-            reused = args.skip_existing and path.exists()
-            print(
-                f"[{completed}/{total}] {dataset_name} "
-                f"({'reusing' if reused else 'fetching'}) ...",
-                flush=True,
-            )
-            began = time.monotonic()
-            try:
-                with fetcher:
-                    if reused:
-                        try:
-                            table = pq.read_table(path)
-                        except Exception:  # noqa: BLE001 - refetch a damaged file
-                            table = fetcher.fetch(request)
-                            reused = False
-                    else:
-                        table = fetcher.fetch(request)
-                _require_expected_schema(fetcher, table)
-                validate_hourly_table(
-                    table, start=start, end=end, label=dataset_name
-                )
-
-                if not reused:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    pq.write_table(table, path, compression="zstd")
-
-                elapsed = time.monotonic() - began
-                entry = {
-                    "source": dataset_name,
-                    "lineage": fetcher.source_name,
-                    "group": group,
-                    "path": f"{group}/{filename}",
-                    "reused": reused,
-                    "seconds": round(elapsed, 2),
-                    **_coverage(table, expected_hours=len(index)),
-                }
-                saved.append(entry)
-                aligned_tables[dataset_name] = _aligned_columns(
-                    group, dataset_name, table
-                )
-                print(
-                    f"  {entry['rows']:,} rows  "
-                    f"missing {entry['missing_hours']:,}  "
-                    f"nulls {_total_nulls(entry)}  "
-                    f"{elapsed:.1f}s"
-                    f"{' reused' if reused else ''}",
-                    flush=True,
-                )
-            except Exception as exc:  # noqa: BLE001 - report every source and continue
-                elapsed = time.monotonic() - began
-                failures.append({
-                    "source": dataset_name,
-                    "lineage": fetcher.source_name,
-                    "group": group,
-                    "error": f"{type(exc).__name__}: {exc}",
-                })
-                print(f"  FAILED after {elapsed:.1f}s: {type(exc).__name__}: {exc}",
-                      file=sys.stderr, flush=True)
+    for result in results:
+        task = result.task
+        dataset_name = task.fetcher.dataset_name
+        if result.error is not None or result.entry is None or result.table is None:
+            failures.append({
+                "source": dataset_name,
+                "lineage": task.fetcher.source_name,
+                "group": task.group,
+                "error": result.error or "fetch produced no table",
+            })
+            continue
+        saved.append(result.entry)
+        aligned_tables[dataset_name] = _aligned_columns(
+            task.group, dataset_name, result.table
+        )
 
     combined_entry: dict[str, Any] | None = None
     if failures or args.no_combined:

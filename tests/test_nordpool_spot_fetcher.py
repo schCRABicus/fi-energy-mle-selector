@@ -106,6 +106,19 @@ def test_fetch_converts_eur_per_mwh_to_c_per_kwh():
     assert client.calls == [("FI", START, END)]
 
 
+def test_fetch_averages_quarter_hourly_prices_into_hours():
+    client = StubClient([
+        (START + timedelta(minutes=15 * quarter), 10.0 + quarter)
+        for quarter in range(4)
+    ])
+    fetcher = make_fetcher(local_path=None, client=client)
+
+    table = fetcher.fetch(FetchRequest(START, END))
+
+    assert table["timestamp_utc"].to_pylist() == [START]
+    assert table["spot_price_c_kwh"].to_pylist() == [pytest.approx(1.15)]
+
+
 def test_fetch_keeps_missing_prices_as_nulls():
     client = StubClient([(START, None), (START + timedelta(hours=1), 10.0)])
     fetcher = make_fetcher(local_path=None, client=client)

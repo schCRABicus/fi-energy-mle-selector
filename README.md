@@ -171,7 +171,7 @@ Notes:
 - FMI Open Data requires no API key. Only `resolution="1h"` is supported.
 - Radiation comes from the nearest station with a multi-year record, which is why Vaasa uses Seinäjoki Pelmaa rather than a station inside the city. Values are FMI's one-minute global-radiation sample at the top of each hour (`GLOB_1MIN`, `timestep=60`), not an hourly mean. Small negative values at night are sensor offset and are preserved.
 - FMI caps one WFS request at 31 days for hourly weather and 7 days for radiation, so `FmiClient` chunks long windows automatically. A 3-year radiation pull issues about 157 requests per city and can take minutes.
-- Long downloads show a status tracker with one progress bar per stage (`weather`, `radiation`) on stderr: chunk count, percent, elapsed time, ETA, and observations so far. It is enabled automatically on an interactive terminal; pass `show_progress=True` to force it in logs or `show_progress=False` to silence it.
+- Long downloads show a status tracker with one progress bar per stage (`weather`, `radiation`) on stderr: chunk count, percent, elapsed time, ETA, and observations so far. It is enabled automatically on an interactive terminal; pass `show_progress=True` to force it in logs or `show_progress=False` to silence it. `scripts/fetch_all.py` enables progress bars only in sequential mode (`--jobs 1`), because parallel bars would interleave.
 - Missing observations become null values in the output table.
 - `fetch_from_local` reads `datasets/fmi/data/<city>_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 
@@ -199,6 +199,7 @@ PY
 Notes:
 - `sahkonhintatanaan.fi` is offline, so prices come from the Energy-Charts API (`api.energy-charts.info`), which mirrors the ENTSO-E / Nord Pool day-ahead series and needs no API key. Prices are converted from EUR/MWh to `c/kWh` (`EUR/MWh ÷ 10`) and exclude VAT; a consumer spot contract adds VAT and the retailer margin.
 - Any window is a single Energy-Charts request: a 3-year pull returns 26,304 hourly values in roughly two seconds.
+- Finland switched its day-ahead market to 15-minute time units on 2025-10-01, and Energy-Charts returns quarter-hour prices from then on. The fetcher averages each hour's quarters into one `c/kWh` value (a missing quarter is ignored; an hour with no prices stays null), so the output remains hourly across the whole window.
 - Energy-Charts data is licensed for private and internal use; see the `license_info` field in API responses.
 - Missing prices become null values in the output table.
 - `fetch_from_local` reads `datasets/energy_charts/data/fi_spot_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
@@ -233,15 +234,16 @@ The window directory is `3y` for a three-calendar-year window, or the exact hour
 ```bash
 uv run python scripts/fetch_all.py
 uv run python scripts/fetch_all.py --skip-existing            # resume
+uv run python scripts/fetch_all.py --jobs 1                   # sequential
 uv run python scripts/fetch_all.py --start 2023-01-01 --end 2026-01-01
 uv run python scripts/fetch_all.py --years 2 --output-dir /tmp/fi-energy
 ```
 
-Bounds are ISO timestamps, interpreted as UTC when no offset is given, and rounded down to the hour. `--end` defaults to the current UTC hour, `--start` defaults to `--years` (3) before the end, and the window is half-open `[start_utc, end_utc)`. `--output-dir` is the base directory; each run writes to `<output-dir>/<window>/`. `--skip-existing` reuses a source Parquet file that already exists for the window, which resumes an interrupted pull; `--no-combined` skips `combined/hourly.parquet`.
+Bounds are ISO timestamps, interpreted as UTC when no offset is given, and rounded down to the hour. `--end` defaults to the current UTC hour, `--start` defaults to `--years` (3) before the end, and the window is half-open `[start_utc, end_utc)`. `--output-dir` is the base directory; each run writes to `<output-dir>/<window>/`. Sources are fetched concurrently with up to `--jobs` workers (default 4), with per-group caps: Fingrid series stay serial to respect the free-tier rate limit, up to three FMI cities run at once, and Energy-Charts is a single request. The FMI cities are scheduled first, so their multi-minute pulls overlap the Fingrid leg. `--jobs 1` restores a fully sequential pull and re-enables the FMI progress bars, which are suppressed when several sources run at once. `--skip-existing` reuses a source Parquet file that was written for the exact same window bounds, which resumes an interrupted pull without mixing in stale hours from a different trailing window; `--no-combined` skips `combined/hourly.parquet`.
 
 The script exits immediately if `FINGRID_API_KEY` is missing. Individual source failures are recorded and the run continues; a partial run exits with status 1, writes `manifest.json` with the `failures` list, and skips the combined table. Every source table is checked for exact UTC hourly timestamps, duplicate timestamps, and rows outside the window. The combined table contains every hour in the window; missing observations become nulls for that source's columns (no interpolation yet), and FMI columns are prefixed by city (`helsinki_temperature_c`, etc.). `datasets/alignment.py` provides the reusable `trailing_window`, `hourly_index`, `validate_hourly_table`, and `align_hourly` helpers.
 
-The FMI leg is slower because FMI caps radiation requests at seven days; a 3-year city takes about five minutes (measured 5.2 minutes for Helsinki over 2022–2024). The spot leg is a single request and finishes in seconds.
+The FMI leg is slower because FMI caps radiation requests at seven days; a 3-year city takes about five minutes (measured 5.2 minutes for Helsinki over 2022–2024), so with several workers the total run is roughly bounded by the slowest FMI city rather than the sum of all series. Concurrent Fingrid requests can hit the free-tier rate limit and are retried with backoff, which can lengthen individual series; lower `--jobs` if that becomes frequent. The spot leg is a single request and finishes in seconds.
 
 ### 5. Add a new fetcher
 

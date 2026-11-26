@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Self
@@ -10,7 +11,13 @@ import pyarrow as pa
 
 from datasets.api import FetchRequest
 from datasets.energy_charts.client import EnergyChartsClient
-from datasets.utils import iter_local_samples, mean_by_bucket, resolution_step, utc_window
+from datasets.utils import (
+    floor_timestamp,
+    iter_local_samples,
+    mean_by_bucket,
+    resolution_step,
+    utc_window,
+)
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -70,8 +77,8 @@ class NordPoolSpotFetcher:
 
     def fetch(self, request: FetchRequest) -> pa.Table:
         start, end = utc_window(request.start_utc, request.end_utc)
-        resolution_step(self.RESOLUTIONS, request.resolution)
-        return self._build_table(self._remote_rows(start, end))
+        step = resolution_step(self.RESOLUTIONS, request.resolution)
+        return self._build_table(self._remote_rows(start, end, step=step))
 
     def fetch_from_local(self, request: FetchRequest) -> pa.Table:
         start, end = utc_window(request.start_utc, request.end_utc)
@@ -101,16 +108,22 @@ class NordPoolSpotFetcher:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def _remote_rows(self, start: datetime, end: datetime) -> list[dict[str, object]]:
-        rows: list[dict[str, object]] = []
+    def _remote_rows(
+        self, start: datetime, end: datetime, *, step: timedelta
+    ) -> list[dict[str, object]]:
+        buckets: defaultdict[datetime, list[float | None]] = defaultdict(list)
         for timestamp, eur_per_mwh in self._client.iter_prices(self._bzn, start, end):
             if start <= timestamp < end:
-                rows.append({
-                    "timestamp_utc": timestamp,
-                    VALUE_COLUMN: (
-                        None if eur_per_mwh is None else _to_c_per_kwh(eur_per_mwh)
-                    ),
-                })
+                buckets[floor_timestamp(timestamp, step)].append(eur_per_mwh)
+
+        rows: list[dict[str, object]] = []
+        for timestamp, prices in sorted(buckets.items()):
+            present = [price for price in prices if price is not None]
+            mean = sum(present) / len(present) if present else None
+            rows.append({
+                "timestamp_utc": timestamp,
+                VALUE_COLUMN: None if mean is None else _to_c_per_kwh(mean),
+            })
         return rows
 
     def _build_table(self, rows: list[dict[str, object]]) -> pa.Table:

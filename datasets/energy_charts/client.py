@@ -46,10 +46,12 @@ class EnergyChartsClient(HttpClient):
         self, bzn: str, start: datetime, end: datetime
     ) -> Iterator[tuple[datetime, float | None]]:
         """
-        Yield hourly day-ahead prices as ``(timestamp_utc, EUR/MWh)``.
+        Yield day-ahead prices as ``(timestamp_utc, EUR/MWh)``.
 
-        The window is half-open ``[start, end)`` in UTC. A missing price is
-        yielded as ``None``.
+        Timestamps keep the API's market time-unit cadence: hourly for most of
+        the series, and 15-minute from the Finnish 15-minute market switch
+        (2025-10-01). The window is half-open ``[start, end)`` in UTC. A missing
+        price is yielded as ``None``.
         """
         start, end = utc_window(start, end)
         payload = self.get_json(

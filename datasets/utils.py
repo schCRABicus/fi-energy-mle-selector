@@ -50,7 +50,7 @@ def mean_by_bucket(
     buckets: defaultdict[datetime, list[float]] = defaultdict(list)
     for timestamp, value in samples:
         if value is not None and start <= timestamp < end:
-            buckets[_floor(timestamp, step)].append(value)
+            buckets[floor_timestamp(timestamp, step)].append(value)
     return [
         (timestamp, sum(values) / len(values))
         for timestamp, values in sorted(buckets.items())
@@ -80,6 +80,7 @@ def _require_utc(value: datetime, field: str) -> datetime:
     return value.astimezone(UTC)
 
 
-def _floor(timestamp: datetime, step: timedelta) -> datetime:
+def floor_timestamp(timestamp: datetime, step: timedelta) -> datetime:
+    """Floors a timestamp to the start of its ``step`` bucket on the same day."""
     midnight = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
     return midnight + (timestamp - midnight) // step * step
