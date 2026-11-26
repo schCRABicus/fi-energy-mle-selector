@@ -7,7 +7,9 @@ import pytest
 
 from datasets.alignment import (
     align_hourly,
+    drop_incomplete_boundary_rows,
     hourly_index,
+    interpolate_short_gaps,
     trailing_window,
     validate_hourly_table,
     window_label,
@@ -231,3 +233,163 @@ def test_validate_hourly_table_rejects_a_non_utc_timestamp_type():
 
     with pytest.raises(ValueError, match="must be"):
         validate_hourly_table(table, start=START, end=END)
+
+
+def test_interpolate_short_gaps_fills_one_and_two_hour_runs():
+    table = make_table([
+        (START, 1.0),
+        (START + timedelta(hours=1), None),
+        (START + timedelta(hours=2), 3.0),
+        (START + timedelta(hours=3), None),
+        (START + timedelta(hours=4), None),
+        (START + timedelta(hours=5), 6.0),
+        (START + timedelta(hours=6), None),
+    ])
+
+    filled = interpolate_short_gaps(table, max_gap=2)
+
+    assert filled["value"].to_pylist() == [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        None,
+    ]
+    assert filled.schema == table.schema
+
+
+def test_interpolate_short_gaps_leaves_longer_runs():
+    table = make_table([
+        (START, 1.0),
+        (START + timedelta(hours=1), None),
+        (START + timedelta(hours=2), None),
+        (START + timedelta(hours=3), None),
+        (START + timedelta(hours=4), 5.0),
+    ])
+
+    filled = interpolate_short_gaps(table, max_gap=2)
+
+    assert filled["value"].to_pylist() == [1.0, None, None, None, 5.0]
+
+
+def test_interpolate_short_gaps_respects_max_gap():
+    table = make_table([
+        (START, 1.0),
+        (START + timedelta(hours=1), None),
+        (START + timedelta(hours=2), None),
+        (START + timedelta(hours=3), 4.0),
+    ])
+
+    assert interpolate_short_gaps(table, max_gap=0)["value"].to_pylist() == [
+        1.0, None, None, 4.0,
+    ]
+    assert interpolate_short_gaps(table, max_gap=1)["value"].to_pylist() == [
+        1.0, None, None, 4.0,
+    ]
+    assert interpolate_short_gaps(table, max_gap=2)["value"].to_pylist() == [
+        1.0, pytest.approx(2.0), pytest.approx(3.0), 4.0,
+    ]
+
+
+def test_interpolate_short_gaps_keeps_leading_nulls():
+    table = make_table([
+        (START, None),
+        (START + timedelta(hours=1), 2.0),
+        (START + timedelta(hours=2), 4.0),
+    ])
+
+    filled = interpolate_short_gaps(table, max_gap=2)
+
+    assert filled["value"].to_pylist() == [None, 2.0, 4.0]
+
+
+def test_interpolate_short_gaps_can_target_one_column():
+    table = pa.Table.from_pydict(
+        {
+            "timestamp_utc": [START, START + timedelta(hours=1), START + timedelta(hours=2)],
+            "first": [1.0, None, 3.0],
+            "second": [10.0, None, 30.0],
+        },
+        schema=pa.schema([
+            pa.field("timestamp_utc", UTC_TIMESTAMP),
+            pa.field("first", pa.float32()),
+            pa.field("second", pa.float32()),
+        ]),
+    )
+
+    filled = interpolate_short_gaps(table, columns=["first"])
+
+    assert filled["first"].to_pylist() == [1.0, 2.0, 3.0]
+    assert filled["second"].to_pylist() == [10.0, None, 30.0]
+
+
+def test_interpolate_short_gaps_rejects_unknown_column():
+    table = make_table([(START, 1.0)])
+
+    with pytest.raises(ValueError, match="Unknown value column"):
+        interpolate_short_gaps(table, columns=["missing"])
+
+
+def test_interpolate_short_gaps_preserves_metadata():
+    table = make_table([(START, 1.0)]).replace_schema_metadata({b"k": b"v"})
+
+    filled = interpolate_short_gaps(table)
+
+    assert filled.schema.metadata == {b"k": b"v"}
+
+
+def test_drop_incomplete_boundary_rows_trims_edges_not_the_interior():
+    table = make_table([
+        (START, None),
+        (START + timedelta(hours=1), 1.0),
+        (START + timedelta(hours=2), None),
+        (START + timedelta(hours=3), 3.0),
+        (START + timedelta(hours=4), None),
+    ])
+
+    trimmed = drop_incomplete_boundary_rows(table)
+
+    assert trimmed["timestamp_utc"].to_pylist() == [
+        START + timedelta(hours=1),
+        START + timedelta(hours=2),
+        START + timedelta(hours=3),
+    ]
+    assert trimmed["value"].to_pylist() == [1.0, None, 3.0]
+
+
+def test_drop_incomplete_boundary_rows_requires_every_column():
+    table = pa.Table.from_pydict(
+        {
+            "timestamp_utc": [
+                START,
+                START + timedelta(hours=1),
+                START + timedelta(hours=2),
+                START + timedelta(hours=3),
+            ],
+            "first": [None, 1.0, 2.0, 3.0],
+            "second": [10.0, 20.0, 30.0, None],
+        },
+        schema=pa.schema([
+            pa.field("timestamp_utc", UTC_TIMESTAMP),
+            pa.field("first", pa.float32()),
+            pa.field("second", pa.float32()),
+        ]),
+    )
+
+    trimmed = drop_incomplete_boundary_rows(table)
+
+    assert trimmed["timestamp_utc"].to_pylist() == [
+        START + timedelta(hours=1),
+        START + timedelta(hours=2),
+    ]
+
+
+def test_drop_incomplete_boundary_rows_handles_an_all_null_column():
+    table = make_table([
+        (START, None),
+        (START + timedelta(hours=1), None),
+    ])
+
+    assert drop_incomplete_boundary_rows(table).num_rows == 0

@@ -1,8 +1,8 @@
-"""Helpers for validating and merging fetcher outputs on one UTC hourly grid."""
+"""Helpers for validating, merging, and cleaning outputs on one UTC hourly grid."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
@@ -11,7 +11,9 @@ from datasets.utils import utc_window
 
 __all__ = [
     "align_hourly",
+    "drop_incomplete_boundary_rows",
     "hourly_index",
+    "interpolate_short_gaps",
     "trailing_window",
     "validate_hourly_table",
     "window_label",
@@ -121,6 +123,124 @@ def align_hourly(
         {TIMESTAMP_COLUMN: timestamps, **columns},
         schema=schema,
     )
+
+
+def interpolate_short_gaps(
+    table: pa.Table,
+    *,
+    max_gap: int = 2,
+    columns: Iterable[str] | None = None,
+) -> pa.Table:
+    """
+    Linearly interpolates short interior runs of missing hourly values.
+
+    A run is filled only when it is at most ``max_gap`` rows long and has a
+    non-null neighbour on both sides; with the default of 2, gaps shorter than
+    three hours are filled. Leading/trailing gaps and longer interior gaps are
+    left untouched (trim those with ``drop_incomplete_boundary_rows``). The
+    timestamp column, column order, schema types, and metadata are preserved.
+    """
+    if max_gap < 0:
+        raise ValueError(f"max_gap must be non-negative, got {max_gap}.")
+
+    value_columns = _selected_value_columns(table, columns)
+    updated = {
+        name: pa.array(
+            _interpolate_values(table[name].to_pylist(), max_gap),
+            type=table.schema.field(name).type,
+        )
+        for name in value_columns
+    }
+    return pa.Table.from_arrays(
+        [
+            table[field.name] if field.name not in updated else updated[field.name]
+            for field in table.schema
+        ],
+        schema=table.schema,
+    )
+
+
+def drop_incomplete_boundary_rows(
+    table: pa.Table,
+    *,
+    columns: Iterable[str] | None = None,
+) -> pa.Table:
+    """
+    Removes leading and trailing rows where any selected value column is null.
+
+    Interior rows are never removed, even when a column is null there. This
+    trims only the window edges where interpolation has no neighbour to use.
+    """
+    value_columns = _selected_value_columns(table, columns)
+    if not value_columns:
+        return table
+
+    values = {name: table[name].to_pylist() for name in value_columns}
+    first = 0
+    last = table.num_rows
+    while first < last and _row_has_null(values, value_columns, first):
+        first += 1
+    while last > first and _row_has_null(values, value_columns, last - 1):
+        last -= 1
+    if first == 0 and last == table.num_rows:
+        return table
+    return table.slice(first, last - first)
+
+
+def _interpolate_values(
+    values: list[float | None], max_gap: int
+) -> list[float | None]:
+    if max_gap == 0:
+        return values
+
+    result = list(values)
+    index = 0
+    while index < len(result):
+        if result[index] is not None:
+            index += 1
+            continue
+
+        gap_end = index
+        while gap_end < len(result) and result[gap_end] is None:
+            gap_end += 1
+        gap = gap_end - index
+        left = result[index - 1] if index > 0 else None
+        right = result[gap_end] if gap_end < len(result) else None
+        if gap <= max_gap and left is not None and right is not None:
+            span = gap + 1
+            for offset in range(1, gap + 1):
+                fraction = offset / span
+                result[index + offset - 1] = left + (right - left) * fraction
+        index = gap_end
+    return result
+
+
+def _selected_value_columns(
+    table: pa.Table, columns: Iterable[str] | None
+) -> list[str]:
+    if columns is None:
+        return [
+            name for name in table.column_names if name != TIMESTAMP_COLUMN
+        ]
+    selected = list(dict.fromkeys(columns))
+    unknown = [
+        name
+        for name in selected
+        if name == TIMESTAMP_COLUMN or name not in table.column_names
+    ]
+    if unknown:
+        raise ValueError(
+            f"Unknown value column(s) for cleaning: {', '.join(unknown)}."
+        )
+    return selected
+
+
+def _row_has_null(
+    values: Mapping[str, list[float | None]],
+    columns: Iterable[str],
+    row: int,
+) -> bool:
+    return any(values[name][row] is None for name in columns)
 
 
 def _validated_timestamps(

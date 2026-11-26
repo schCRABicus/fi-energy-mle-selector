@@ -40,7 +40,9 @@ from datasets import (
 from datasets.alignment import (
     TIMESTAMP_COLUMN,
     align_hourly,
+    drop_incomplete_boundary_rows,
     hourly_index,
+    interpolate_short_gaps,
     trailing_window,
     validate_hourly_table,
     window_label,
@@ -52,6 +54,9 @@ FMI_CITIES = ("helsinki", "vaasa", "oulu")
 # Fingrid's free tier rate-limits bursts, so keep its series serial; FMI
 # handles the three city pulls comfortably, and Energy-Charts is one request.
 GROUP_LIMITS = {"fingrid": 1, "fmi": 3, "energy_charts": 1}
+
+# Linear interpolation is limited to runs of 1-2 missing hours (< 3 hours).
+MAX_INTERPOLATION_GAP_HOURS = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -423,6 +428,7 @@ def main() -> int:
         )
 
     combined_entry: dict[str, Any] | None = None
+    cleaned_entry: dict[str, Any] | None = None
     if failures or args.no_combined:
         if failures:
             print(
@@ -452,6 +458,47 @@ def main() -> int:
             flush=True,
         )
 
+        trimmed = drop_incomplete_boundary_rows(combined)
+        cleaned = interpolate_short_gaps(
+            trimmed, max_gap=MAX_INTERPOLATION_GAP_HOURS
+        )
+        filled_values = {
+            name: trimmed[name].null_count - cleaned[name].null_count
+            for name in value_columns
+        }
+        cleaned_path = window_dir / "combined" / "hourly_clean.parquet"
+        pq.write_table(cleaned, cleaned_path, compression="zstd")
+        cleaned_timestamps = cleaned[TIMESTAMP_COLUMN].to_pylist()
+        remaining_nulls = {
+            name: cleaned[name].null_count for name in value_columns
+        }
+        cleaned_entry = {
+            "path": "combined/hourly_clean.parquet",
+            "rows": cleaned.num_rows,
+            "feature_columns": len(value_columns),
+            "first_utc": (
+                _iso(cleaned_timestamps[0]) if cleaned_timestamps else None
+            ),
+            "last_utc": (
+                _iso(cleaned_timestamps[-1]) if cleaned_timestamps else None
+            ),
+            "rows_removed_at_boundaries": combined.num_rows - trimmed.num_rows,
+            "interpolation": {
+                "method": "linear",
+                "max_gap_hours": MAX_INTERPOLATION_GAP_HOURS,
+                "filled_values": filled_values,
+                "total_filled": sum(filled_values.values()),
+            },
+            "null_values": remaining_nulls,
+        }
+        print(
+            f"cleaned   {cleaned.num_rows:,} rows; "
+            f"filled {sum(filled_values.values()):,} short-gap values; "
+            f"dropped {combined.num_rows - trimmed.num_rows:,} boundary rows; "
+            f"{sum(remaining_nulls.values()):,} nulls remain",
+            flush=True,
+        )
+
     manifest = {
         "generated_at_utc": _iso(datetime.now(UTC)),
         "status": "partial" if failures else "ok",
@@ -466,6 +513,7 @@ def main() -> int:
         },
         "sources": saved,
         "combined": combined_entry,
+        "cleaned": cleaned_entry,
         "failures": failures,
     }
     manifest_path = window_dir / "manifest.json"

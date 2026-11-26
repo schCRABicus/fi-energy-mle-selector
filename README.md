@@ -27,7 +27,7 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │   ├── api.py        # FetchRequest and DataSourceFetcher protocol
 │   ├── http_client.py# HTTP client with retries (httpx + tenacity)
 │   ├── utils.py      # Window validation, resampling, local Parquet loading
-│   ├── alignment.py  # UTC hourly-grid validation and outer-join
+│   ├── alignment.py  # UTC hourly validation, outer-join, gap filling
 │   ├── fingrid/      # Fingrid client, shared series fetcher, per-dataset fetchers
 │   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
 │   ├── fmi/          # FMI WFS client and city weather fetcher
@@ -226,10 +226,12 @@ data/
     │   ├── vaasa_weather.parquet
     │   └── oulu_weather.parquet
     ├── energy_charts/spot_price_fi.parquet
-    └── combined/hourly.parquet  # every window hour, all series outer-joined
+    └── combined/
+        ├── hourly.parquet        # raw outer join: every window hour
+        └── hourly_clean.parquet  # short gaps filled, boundary rows trimmed
 ```
 
-The window directory is `3y` for a three-calendar-year window, or the exact hour count such as `24h` for other ranges. Dataset filenames are purpose-based; the manifest keeps the fetcher lineage (e.g. `fingrid_75`) alongside the clear name.
+The window directory is `3y` for a three-calendar-year window, or the exact hour count such as `24h` for other ranges. Dataset filenames are purpose-based; the manifest keeps the fetcher lineage (e.g. `fingrid_75`) alongside the clear name. `combined/hourly_clean.parquet` is the finalized Phase 1 table: leading and trailing rows where any feature is null are dropped, then interior runs of one or two missing hours (a gap shorter than three hours) are filled by linear interpolation. Longer interior gaps stay null; `manifest.json` records the filled counts, boundary rows removed, and remaining nulls per column.
 
 ```bash
 uv run python scripts/fetch_all.py
@@ -239,11 +241,11 @@ uv run python scripts/fetch_all.py --start 2023-01-01 --end 2026-01-01
 uv run python scripts/fetch_all.py --years 2 --output-dir /tmp/fi-energy
 ```
 
-Bounds are ISO timestamps, interpreted as UTC when no offset is given, and rounded down to the hour. `--end` defaults to the current UTC hour, `--start` defaults to `--years` (3) before the end, and the window is half-open `[start_utc, end_utc)`. `--output-dir` is the base directory; each run writes to `<output-dir>/<window>/`. Sources are fetched concurrently with up to `--jobs` workers (default 4), with per-group caps: Fingrid series stay serial to respect the free-tier rate limit, up to three FMI cities run at once, and Energy-Charts is a single request. The FMI cities are scheduled first, so their multi-minute pulls overlap the Fingrid leg. `--jobs 1` restores a fully sequential pull and re-enables the FMI progress bars, which are suppressed when several sources run at once. `--skip-existing` reuses a source Parquet file that was written for the exact same window bounds, which resumes an interrupted pull without mixing in stale hours from a different trailing window; `--no-combined` skips `combined/hourly.parquet`.
+Bounds are ISO timestamps, interpreted as UTC when no offset is given, and rounded down to the hour. `--end` defaults to the current UTC hour, `--start` defaults to `--years` (3) before the end, and the window is half-open `[start_utc, end_utc)`. `--output-dir` is the base directory; each run writes to `<output-dir>/<window>/`. Sources are fetched concurrently with up to `--jobs` workers (default 4), with per-group caps: Fingrid series stay serial to respect the free-tier rate limit, up to three FMI cities run at once, and Energy-Charts is a single request. The FMI cities are scheduled first, so their multi-minute pulls overlap the Fingrid leg. `--jobs 1` restores a fully sequential pull and re-enables the FMI progress bars, which are suppressed when several sources run at once. `--skip-existing` reuses a source Parquet file that was written for the exact same window bounds, which resumes an interrupted pull without mixing in stale hours from a different trailing window; `--no-combined` skips the combined and cleaned outputs.
 
-The script exits immediately if `FINGRID_API_KEY` is missing. Individual source failures are recorded and the run continues; a partial run exits with status 1, writes `manifest.json` with the `failures` list, and skips the combined table. Every source table is checked for exact UTC hourly timestamps, duplicate timestamps, and rows outside the window. The combined table contains every hour in the window; missing observations become nulls for that source's columns (no interpolation yet), and FMI columns are prefixed by city (`helsinki_temperature_c`, etc.). `datasets/alignment.py` provides the reusable `trailing_window`, `hourly_index`, `validate_hourly_table`, and `align_hourly` helpers.
+The script exits immediately if `FINGRID_API_KEY` is missing. Individual source failures are recorded and the run continues; a partial run exits with status 1, writes `manifest.json` with the `failures` list, and skips the combined/cleaned tables. Every source table is checked for exact UTC hourly timestamps, duplicate timestamps, and rows outside the window. `combined/hourly.parquet` contains every hour in the window; missing observations become nulls for that source's columns, and FMI columns are prefixed by city (`helsinki_temperature_c`, etc.). `datasets/alignment.py` provides the reusable `trailing_window`, `hourly_index`, `validate_hourly_table`, `align_hourly`, `interpolate_short_gaps`, and `drop_incomplete_boundary_rows` helpers.
 
-The FMI leg is slower because FMI caps radiation requests at seven days; a 3-year city takes about five minutes (measured 5.2 minutes for Helsinki over 2022–2024), so with several workers the total run is roughly bounded by the slowest FMI city rather than the sum of all series. Concurrent Fingrid requests can hit the free-tier rate limit and are retried with backoff, which can lengthen individual series; lower `--jobs` if that becomes frequent. The spot leg is a single request and finishes in seconds.
+The FMI leg is slower because FMI caps radiation requests at seven days; a 3-year city takes about five minutes (measured 5.2 minutes for Helsinki over 2022–2024), so with several workers the total run is roughly bounded by the slowest FMI city rather than the sum of all series. Fingrid series are fetched one at a time so the free-tier rate limit is not exceeded; a higher-tier key can raise `GROUP_LIMITS["fingrid"]` in the script. The spot leg is a single request and finishes in seconds.
 
 ### 5. Add a new fetcher
 
