@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from fi_energy.features import build_feature_table, describe_features
+from fi_energy.features.thermal_demand import HEATING_BASE_TEMPERATURE_C
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -106,8 +107,10 @@ def _schema_metadata(
     generated_at: datetime,
     description: dict[str, Any],
 ) -> dict[bytes, bytes]:
-    diagnostics = description["diagnostics"]["wind_ratios"]
-    negative_min = diagnostics["negative_wind_min_mw"]
+    diagnostics = description["diagnostics"]
+    wind = diagnostics["wind_ratios"]
+    thermal = diagnostics["thermal_demand"]
+    negative_min = wind["negative_wind_min_mw"]
     values = {
         "feature_stage": "phase2",
         "generated_at_utc": _iso(generated_at),
@@ -116,10 +119,16 @@ def _schema_metadata(
         "feature_names": json.dumps(description["feature_columns"]),
         "feature_specs": json.dumps(description["features"]),
         "wind_negative_policy": "clip_to_zero",
-        "wind_negative_count": str(diagnostics["negative_wind_count"]),
+        "wind_negative_count": str(wind["negative_wind_count"]),
         "wind_negative_min_mw": "" if negative_min is None else str(negative_min),
         "zero_denominator_policy": "null",
-        "zero_denominators": json.dumps(diagnostics["zero_denominators"]),
+        "zero_denominators": json.dumps(wind["zero_denominators"]),
+        "heating_base_temperature_c": str(HEATING_BASE_TEMPERATURE_C),
+        "heating_hours": str(thermal["heating_hours"]),
+        "temperature_nulls": str(thermal["temperature_nulls"]),
+        "temperature_rolling_policy": (
+            "trailing 24h/72h; nulls skipped; full window required"
+        ),
     }
     metadata = dict(existing or {})
     metadata.update({
@@ -147,7 +156,9 @@ def _write_manifest(
     generated_at: datetime,
     description: dict[str, Any],
 ) -> None:
-    diagnostics = description["diagnostics"]["wind_ratios"]
+    diagnostics = description["diagnostics"]
+    wind = diagnostics["wind_ratios"]
+    thermal = diagnostics["thermal_demand"]
     manifest = {
         "generated_at_utc": _iso(generated_at),
         "status": "ok",
@@ -167,12 +178,27 @@ def _write_manifest(
         "policy": {
             "negative_wind": {
                 "action": "clip_to_zero",
-                "count": diagnostics["negative_wind_count"],
-                "min_mw": diagnostics["negative_wind_min_mw"],
+                "count": wind["negative_wind_count"],
+                "min_mw": wind["negative_wind_min_mw"],
             },
             "zero_denominators": {
                 "action": "null",
-                "counts": diagnostics["zero_denominators"],
+                "counts": wind["zero_denominators"],
+            },
+            "heating_demand": {
+                "base_temperature_c": HEATING_BASE_TEMPERATURE_C,
+                "heating_hours": thermal["heating_hours"],
+                "max_heating_degree_hours": (
+                    thermal["max_heating_degree_hours"]
+                ),
+            },
+            "temperature_rolling": {
+                "windows_hours": [24, 72],
+                "alignment": "trailing; never uses future hours",
+                "nulls": (
+                    "skipped within the window; null until a full window of "
+                    "history exists"
+                ),
             },
             "nulls": "propagate; no imputation",
             "rows": "preserve every source row",
@@ -213,6 +239,15 @@ def _print_summary(
         )
     else:
         print("wind_mw   no negative values to clip", flush=True)
+
+    thermal = description["diagnostics"]["thermal_demand"]
+    print(
+        f"temp      {thermal['temperature_nulls']:,} null Helsinki readings; "
+        f"{thermal['heating_hours']:,} heating hours "
+        f"(max {_format(thermal['max_heating_degree_hours'])} degree-hours "
+        f"below {HEATING_BASE_TEMPERATURE_C:g} C)",
+        flush=True,
+    )
 
     for name in description["feature_columns"]:
         stats = description["statistics"][name]

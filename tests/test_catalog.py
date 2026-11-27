@@ -156,9 +156,15 @@ def test_diagnostics_are_keyed_by_group_name():
     }
 
 
-def test_default_catalog_contains_wind_ratios():
-    assert [group.name for group in DEFAULT_CATALOG.groups] == ["wind_ratios"]
+def test_default_catalog_contains_the_registered_groups():
+    assert [group.name for group in DEFAULT_CATALOG.groups] == [
+        "wind_ratios",
+        "thermal_demand",
+    ]
     assert DEFAULT_CATALOG.feature_names == (
         "wind_penetration_ratio",
         "wind_capacity_factor",
+        "heating_degree_hours",
+        "temp_rolling_24h",
+        "temp_rolling_72h",
     )

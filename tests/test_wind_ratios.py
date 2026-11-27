@@ -9,6 +9,7 @@ import pytest
 
 from fi_energy.features import (
     DEFAULT_CATALOG,
+    FeatureCatalog,
     WindRatiosFeatureGroup,
     build_feature_table,
     describe_features,
@@ -20,6 +21,7 @@ START = datetime(2024, 1, 1, tzinfo=UTC)
 UTC_TIMESTAMP = pa.timestamp("us", tz="UTC")
 FEATURE_COLUMNS = ["wind_penetration_ratio", "wind_capacity_factor"]
 GROUP = WindRatiosFeatureGroup()
+WIND_ONLY_CATALOG = FeatureCatalog((GROUP,))
 
 
 def make_table(
@@ -191,21 +193,30 @@ def test_compute_handles_an_empty_table():
 
 
 def test_registry_metadata():
-    assert len(DEFAULT_CATALOG.groups) == 1
     assert isinstance(DEFAULT_CATALOG.groups[0], WindRatiosFeatureGroup)
     assert DEFAULT_CATALOG.groups[0].name == WIND_RATIOS_GROUP == "wind_ratios"
-    assert DEFAULT_CATALOG.specs == WindRatiosFeatureGroup.specs
-    assert [spec.name for spec in DEFAULT_CATALOG.specs] == FEATURE_COLUMNS
-    assert all(isinstance(spec, FeatureSpec) for spec in DEFAULT_CATALOG.specs)
+    assert DEFAULT_CATALOG.specs[:2] == WindRatiosFeatureGroup.specs
+    assert [spec.name for spec in WindRatiosFeatureGroup.specs] == FEATURE_COLUMNS
+    assert all(
+        isinstance(spec, FeatureSpec) for spec in WindRatiosFeatureGroup.specs
+    )
     assert GROUP.feature_names == tuple(FEATURE_COLUMNS)
     assert GROUP.inputs == (
         "wind_mw",
         "consumption_mw",
         "wind_capacity_mw",
     )
-    assert DEFAULT_CATALOG.specs[0].inputs == ("wind_mw", "consumption_mw")
-    assert DEFAULT_CATALOG.specs[1].inputs == ("wind_mw", "wind_capacity_mw")
-    assert all(spec.description.strip() for spec in DEFAULT_CATALOG.specs)
+    assert WindRatiosFeatureGroup.specs[0].inputs == (
+        "wind_mw",
+        "consumption_mw",
+    )
+    assert WindRatiosFeatureGroup.specs[1].inputs == (
+        "wind_mw",
+        "wind_capacity_mw",
+    )
+    assert all(
+        spec.description.strip() for spec in WindRatiosFeatureGroup.specs
+    )
 
 
 def test_build_feature_table_selects_timestamp_and_features():
@@ -215,7 +226,7 @@ def test_build_feature_table_selects_timestamp_and_features():
         [8000.0, 8000.0],
     )
 
-    result = build_feature_table(table)
+    result = build_feature_table(table, catalog=WIND_ONLY_CATALOG)
 
     assert result.column_names == ["timestamp_utc", *FEATURE_COLUMNS]
     assert result.num_rows == table.num_rows
@@ -227,14 +238,14 @@ def test_build_feature_table_preserves_source_metadata():
         b"k": b"v"
     })
 
-    result = build_feature_table(table)
+    result = build_feature_table(table, catalog=WIND_ONLY_CATALOG)
 
     assert result.schema.metadata == {b"k": b"v"}
 
 
 def test_build_feature_table_rejects_empty_source():
     with pytest.raises(ValueError, match="no rows"):
-        build_feature_table(make_table([], [], []))
+        build_feature_table(make_table([], [], []), catalog=WIND_ONLY_CATALOG)
 
 
 def test_build_feature_table_rejects_missing_timestamp():
@@ -245,7 +256,7 @@ def test_build_feature_table_rejects_missing_timestamp():
     })
 
     with pytest.raises(ValueError, match="no 'timestamp_utc'"):
-        build_feature_table(table)
+        build_feature_table(table, catalog=WIND_ONLY_CATALOG)
 
 
 def test_build_feature_table_rejects_non_utc_timestamp_type():
@@ -256,7 +267,7 @@ def test_build_feature_table_rejects_non_utc_timestamp_type():
     )
 
     with pytest.raises(ValueError, match="must be"):
-        build_feature_table(table)
+        build_feature_table(table, catalog=WIND_ONLY_CATALOG)
 
 
 def test_build_feature_table_rejects_null_timestamps():
@@ -267,7 +278,7 @@ def test_build_feature_table_rejects_null_timestamps():
     )
 
     with pytest.raises(ValueError, match="null values"):
-        build_feature_table(table)
+        build_feature_table(table, catalog=WIND_ONLY_CATALOG)
 
 
 def test_build_feature_table_rejects_duplicate_timestamps():
@@ -279,7 +290,7 @@ def test_build_feature_table_rejects_duplicate_timestamps():
     )
 
     with pytest.raises(ValueError, match="duplicate timestamp"):
-        build_feature_table(table)
+        build_feature_table(table, catalog=WIND_ONLY_CATALOG)
 
 
 def test_build_feature_table_rejects_off_grid_timestamps():
@@ -295,12 +306,12 @@ def test_build_feature_table_rejects_off_grid_timestamps():
     )
 
     with pytest.raises(ValueError, match="hourly grid"):
-        build_feature_table(table)
+        build_feature_table(table, catalog=WIND_ONLY_CATALOG)
 
 
 def test_build_feature_table_rejects_non_table():
     with pytest.raises(TypeError, match="pyarrow Table"):
-        build_feature_table({})  # type: ignore[arg-type]
+        build_feature_table({}, catalog=WIND_ONLY_CATALOG)  # type: ignore[arg-type]
 
 
 def test_describe_features_reports_policy_and_statistics():
@@ -309,9 +320,9 @@ def test_describe_features_reports_policy_and_statistics():
         [0.0, 10000.0, 10000.0],
         [8000.0, 0.0, 8000.0],
     )
-    features = build_feature_table(table)
+    features = build_feature_table(table, catalog=WIND_ONLY_CATALOG)
 
-    description = describe_features(table, features)
+    description = describe_features(table, features, catalog=WIND_ONLY_CATALOG)
 
     assert description["rows"] == 3
     assert description["groups"] == ["wind_ratios"]

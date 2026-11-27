@@ -9,6 +9,7 @@ import pyarrow as pa
 
 from fi_energy.features.group import FeatureGroup
 from fi_energy.features.spec import FeatureSpec
+from fi_energy.features.thermal_demand import ThermalDemandFeatureGroup
 from fi_energy.features.wind_ratios import WindRatiosFeatureGroup
 
 __all__ = ["DEFAULT_CATALOG", "FeatureCatalog"]
@@ -128,4 +129,6 @@ def _validate_dependencies(
         produced.update(group.feature_names)
 
 
-DEFAULT_CATALOG = FeatureCatalog((WindRatiosFeatureGroup(),))
+DEFAULT_CATALOG = FeatureCatalog(
+    (WindRatiosFeatureGroup(), ThermalDemandFeatureGroup())
+)
