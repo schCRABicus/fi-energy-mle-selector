@@ -9,9 +9,9 @@ from typing import Self
 
 import pyarrow as pa
 
-from datasets.api import FetchRequest
-from datasets.fingrid.client import FingridClient
-from datasets.utils import iter_local_samples, mean_by_bucket, resolution_step, utc_window
+from fi_energy.datasets.api import FetchRequest
+from fi_energy.datasets.fingrid.client import FingridClient
+from fi_energy.datasets.utils import iter_local_samples, mean_by_bucket, resolution_step, utc_window
 
 
 class FingridSeriesFetcher:

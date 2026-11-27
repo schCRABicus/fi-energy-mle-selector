@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pyarrow as pa
 import pytest
 
-from datasets.alignment import (
+from fi_energy.datasets.alignment import (
     align_hourly,
     drop_incomplete_boundary_rows,
     hourly_index,

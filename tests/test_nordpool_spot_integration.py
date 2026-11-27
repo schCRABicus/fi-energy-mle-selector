@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from datasets import FetchRequest, NordPoolSpotFetcher
+from fi_energy.datasets import FetchRequest, NordPoolSpotFetcher
 
 WINDOW_START = datetime(2024, 3, 1, tzinfo=UTC)
 WINDOW_END = datetime(2024, 3, 2, tzinfo=UTC)

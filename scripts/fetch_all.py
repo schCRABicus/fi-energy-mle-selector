@@ -15,15 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 import pyarrow as pa
 import pyarrow.parquet as pq
 from dotenv import load_dotenv
 
-from datasets import (
+from fi_energy.datasets import (
     DataSourceFetcher,
     FetchRequest,
     FingridConsumptionFetcher,
@@ -37,7 +33,7 @@ from datasets import (
     FmiWeatherFetcher,
     NordPoolSpotFetcher,
 )
-from datasets.alignment import (
+from fi_energy.datasets.alignment import (
     TIMESTAMP_COLUMN,
     align_hourly,
     drop_incomplete_boundary_rows,
@@ -47,7 +43,9 @@ from datasets.alignment import (
     validate_hourly_table,
     window_label,
 )
-from datasets.utils import utc_window
+from fi_energy.datasets.utils import utc_window
+
+ROOT = Path(__file__).resolve().parents[1]
 
 FMI_CITIES = ("helsinki", "vaasa", "oulu")
 

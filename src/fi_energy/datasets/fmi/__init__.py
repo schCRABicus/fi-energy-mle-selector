@@ -1,5 +1,5 @@
-from datasets.fmi.client import FmiClient
-from datasets.fmi.weather import (
+from fi_energy.datasets.fmi.client import FmiClient
+from fi_energy.datasets.fmi.weather import (
     DEFAULT_LOCAL_PATHS,
     STATIONS,
     FmiStation,

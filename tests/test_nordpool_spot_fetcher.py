@@ -8,8 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datasets import DataSourceFetcher, FetchRequest, NordPoolSpotFetcher
-from datasets.energy_charts.spot import DEFAULT_LOCAL_PATHS, SPOT_PRICE_SCHEMA
+from fi_energy.datasets import DataSourceFetcher, FetchRequest, NordPoolSpotFetcher
+from fi_energy.datasets.energy_charts.spot import DEFAULT_LOCAL_PATHS, SPOT_PRICE_SCHEMA
 
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 END = datetime(2024, 1, 1, 2, 0, tzinfo=UTC)

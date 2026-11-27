@@ -9,15 +9,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datasets import (
+from fi_energy.datasets import (
     DataSourceFetcher,
     FetchRequest,
     FingridEEFlowFetcher,
     FingridSE1FlowFetcher,
     FingridSE3FlowFetcher,
 )
-from datasets.fingrid import flows
-from datasets.fingrid.series_fetcher import FingridSeriesFetcher
+from fi_energy.datasets.fingrid import flows
+from fi_energy.datasets.fingrid.series_fetcher import FingridSeriesFetcher
 
 API_KEY = "test-api-key"
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)

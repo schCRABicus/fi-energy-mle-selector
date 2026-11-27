@@ -7,14 +7,16 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datasets import DataSourceFetcher, FetchRequest, FingridWindCapacityFetcher
-from datasets.fingrid.wind_capacity import DEFAULT_LOCAL_PATH
+from fi_energy.datasets import DataSourceFetcher, FetchRequest, FingridWindCapacityFetcher
+from fi_energy.datasets.fingrid.wind_capacity import DEFAULT_LOCAL_PATH
 
 API_KEY = "test-api-key"
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 END = datetime(2024, 1, 1, 2, 0, tzinfo=UTC)
 BUNDLED_SAMPLE = (
     Path(__file__).parents[1]
+    / "src"
+    / "fi_energy"
     / "datasets"
     / "fingrid"
     / "data"

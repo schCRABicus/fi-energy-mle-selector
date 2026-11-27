@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
 
-from datasets.utils import utc_window
+from fi_energy.datasets.utils import utc_window
 
 __all__ = [
     "align_hourly",

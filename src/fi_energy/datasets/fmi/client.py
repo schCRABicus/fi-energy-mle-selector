@@ -9,9 +9,9 @@ from xml.etree import ElementTree
 import httpx
 from tenacity import RetryCallState
 
-from datasets.http_client import HttpClient
-from datasets.progress import ChunkProgress
-from datasets.utils import utc_window
+from fi_energy.datasets.http_client import HttpClient
+from fi_energy.datasets.progress import ChunkProgress
+from fi_energy.datasets.utils import utc_window
 
 FMI_API_BASE_URL = "https://opendata.fmi.fi/"
 WFS_PATH = "wfs"

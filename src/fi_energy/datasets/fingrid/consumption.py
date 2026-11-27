@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from datasets.fingrid.client import FingridClient
-from datasets.fingrid.series_fetcher import FingridSeriesFetcher
+from fi_energy.datasets.fingrid.client import FingridClient
+from fi_energy.datasets.fingrid.series_fetcher import FingridSeriesFetcher
 
 DEFAULT_LOCAL_PATH = Path(__file__).parent / "data" / "consumption_sample.parquet"
 

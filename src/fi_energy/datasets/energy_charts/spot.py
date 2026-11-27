@@ -9,9 +9,9 @@ from typing import Self
 
 import pyarrow as pa
 
-from datasets.api import FetchRequest
-from datasets.energy_charts.client import EnergyChartsClient
-from datasets.utils import (
+from fi_energy.datasets.api import FetchRequest
+from fi_energy.datasets.energy_charts.client import EnergyChartsClient
+from fi_energy.datasets.utils import (
     floor_timestamp,
     iter_local_samples,
     mean_by_bucket,

@@ -8,20 +8,27 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datasets import (
+from fi_energy.datasets import (
     DataSourceFetcher,
     FetchRequest,
     FingridConsumptionFetcher,
     FingridHydroFetcher,
     FingridNuclearFetcher,
 )
-from datasets.fingrid import consumption, hydro, nuclear
-from datasets.fingrid.series_fetcher import FingridSeriesFetcher
+from fi_energy.datasets.fingrid import consumption, hydro, nuclear
+from fi_energy.datasets.fingrid.series_fetcher import FingridSeriesFetcher
 
 API_KEY = "test-api-key"
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 END = datetime(2024, 1, 1, 2, 0, tzinfo=UTC)
-DATA_DIR = Path(__file__).parents[1] / "datasets" / "fingrid" / "data"
+DATA_DIR = (
+    Path(__file__).parents[1]
+    / "src"
+    / "fi_energy"
+    / "datasets"
+    / "fingrid"
+    / "data"
+)
 
 # first/last values are hourly means of the committed 2024-03-01 snapshot
 CASES = [

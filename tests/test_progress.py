@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from io import StringIO
 
-from datasets.progress import DownloadTracker, ProgressBar
+from fi_energy.datasets.progress import DownloadTracker, ProgressBar
 
 
 class FakeTty(StringIO):

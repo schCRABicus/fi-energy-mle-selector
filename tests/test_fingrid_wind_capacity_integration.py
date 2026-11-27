@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from dotenv import load_dotenv
 
-from datasets import FetchRequest, FingridWindCapacityFetcher
+from fi_energy.datasets import FetchRequest, FingridWindCapacityFetcher
 
 load_dotenv()
 

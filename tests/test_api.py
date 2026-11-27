@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-import datasets
-from datasets import DataSourceFetcher, FetchRequest
+import fi_energy.datasets as datasets
+from fi_energy.datasets import DataSourceFetcher, FetchRequest
 
 
 def test_fetch_request_defaults_to_hourly_resolution():

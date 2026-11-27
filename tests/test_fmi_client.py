@@ -7,7 +7,7 @@ import httpx
 import pytest
 from tenacity import wait_none
 
-from datasets import FmiClient
+from fi_energy.datasets import FmiClient
 
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 END = datetime(2024, 1, 1, 2, 0, tzinfo=UTC)

@@ -9,10 +9,10 @@ from typing import Self
 
 import pyarrow as pa
 
-from datasets.api import FetchRequest
-from datasets.fmi.client import FmiClient
-from datasets.progress import ChunkProgress, DownloadTracker
-from datasets.utils import iter_local_samples, mean_by_bucket, resolution_step, utc_window
+from fi_energy.datasets.api import FetchRequest
+from fi_energy.datasets.fmi.client import FmiClient
+from fi_energy.datasets.progress import ChunkProgress, DownloadTracker
+from fi_energy.datasets.utils import iter_local_samples, mean_by_bucket, resolution_step, utc_window
 
 DATA_DIR = Path(__file__).parent / "data"
 

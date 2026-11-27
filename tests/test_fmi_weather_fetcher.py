@@ -8,8 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datasets import DataSourceFetcher, FetchRequest, FmiWeatherFetcher
-from datasets.fmi.weather import (
+from fi_energy.datasets import DataSourceFetcher, FetchRequest, FmiWeatherFetcher
+from fi_energy.datasets.fmi.weather import (
     DEFAULT_LOCAL_PATHS,
     STATIONS,
     WEATHER_SCHEMA,

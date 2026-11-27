@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from dotenv import load_dotenv
 
-from datasets import (
+from fi_energy.datasets import (
     FetchRequest,
     FingridEEFlowFetcher,
     FingridSE1FlowFetcher,

@@ -23,23 +23,25 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 
 ## Repository Structure
 ```text
-├── datasets/         # Data-source adapters: shared contract + per-source fetchers
-│   ├── api.py        # FetchRequest and DataSourceFetcher protocol
-│   ├── http_client.py# HTTP client with retries (httpx + tenacity)
-│   ├── utils.py      # Window validation, resampling, local Parquet loading
-│   ├── alignment.py  # UTC hourly validation, outer-join, gap filling
-│   ├── fingrid/      # Fingrid client, shared series fetcher, per-dataset fetchers
-│   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
-│   ├── fmi/          # FMI WFS client and city weather fetcher
-│   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
-│   └── energy_charts/# Energy-Charts client and Nord Pool spot-price fetcher
-│       └── data/     # Committed 1-day Parquet snapshots for offline runs
+├── src/
+│   └── fi_energy/    # Installable package, imported as `fi_energy` (editable via `uv sync`)
+│       ├── datasets/ # Data-source adapters: shared contract + per-source fetchers
+│       │   ├── api.py        # FetchRequest and DataSourceFetcher protocol
+│       │   ├── http_client.py# HTTP client with retries (httpx + tenacity)
+│       │   ├── utils.py      # Window validation, resampling, local Parquet loading
+│       │   ├── alignment.py  # UTC hourly validation, outer-join, gap filling
+│       │   ├── fingrid/      # Fingrid client, shared series fetcher, per-dataset fetchers
+│       │   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
+│       │   ├── fmi/          # FMI WFS client and city weather fetcher
+│       │   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
+│       │   └── energy_charts/# Energy-Charts client and Nord Pool spot-price fetcher
+│       │       └── data/     # Committed 1-day Parquet snapshots for offline runs
+│       └── features/         # Phase 2 feature engineering (models/simulator planned)
 ├── tests/            # Offline unit tests and live API integration tests
-├── scripts/          # Reproducible data pipelines (full Phase 1 pull)
+├── scripts/          # Reproducible pipelines (Phase 1 pull, Phase 2 feature build)
 ├── configs/          # (planned) retail contract definitions & household load profiles
-├── data/             # Full downloaded hourly datasets and manifest (git-ignored)
-├── src/              # (planned) feature engineering, PyTorch MLE models, simulator
-├── pyproject.toml    # Project metadata, dependencies, pytest configuration
+├── data/             # Hourly datasets, feature tables, and manifests (git-ignored)
+├── pyproject.toml    # Project metadata, dependencies, packaging, pytest configuration
 ├── uv.lock           # Locked dependency versions
 ├── README.md
 └── TODO.md           # Project roadmap and implementation checklist
@@ -60,7 +62,7 @@ cd fi-energy-mle-selector
 uv sync
 ```
 
-`uv sync` creates `.venv/` and installs the locked runtime and `dev` dependencies (including pytest). Add or change dependencies with `uv add <package>` / `uv add --dev <package>` — never edit `uv.lock` by hand. Prefix every command with `uv run` so it executes inside `.venv/`.
+`uv sync` creates `.venv/`, installs the locked runtime and `dev` dependencies (including pytest), and installs this project itself in editable mode, so `import fi_energy` works from anywhere inside `uv run`. Add or change dependencies with `uv add <package>` / `uv add --dev <package>` — never edit `uv.lock` by hand. Prefix every command with `uv run` so it executes inside `.venv/`.
 
 ### 2. Configure credentials
 
@@ -87,11 +89,11 @@ uv run pytest tests/test_fingrid_wind_fetcher.py -q
 uv run pytest tests/test_fingrid_wind_fetcher.py::test_fetch_from_local_reads_bundled_sample
 ```
 
-Unit tests never touch the network: fetcher tests read the committed snapshots under `datasets/fingrid/data/`, `datasets/fmi/data/`, and `datasets/energy_charts/data/` (all covering 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. The Fingrid snapshots hold the raw cadence: 96 quarter-hour samples for wind generation, consumption, and each cross-border flow, 24 hourly samples for wind capacity, and 958 roughly-90-second samples for nuclear and hydro. Each FMI snapshot holds 24 hourly rows for one city, and the spot-price snapshot holds 24 hourly FI prices. Only the integration tests hit the real APIs (a handful of requests, with automatic retry/backoff), so avoid running them in tight loops against the free-tier quota.
+Unit tests never touch the network: fetcher tests read the committed snapshots under `src/fi_energy/datasets/fingrid/data/`, `src/fi_energy/datasets/fmi/data/`, and `src/fi_energy/datasets/energy_charts/data/` (all covering 2024-03-01), and client tests serve scripted responses through `httpx.MockTransport`. The Fingrid snapshots hold the raw cadence: 96 quarter-hour samples for wind generation, consumption, and each cross-border flow, 24 hourly samples for wind capacity, and 958 roughly-90-second samples for nuclear and hydro. Each FMI snapshot holds 24 hourly rows for one city, and the spot-price snapshot holds 24 hourly FI prices. Only the integration tests hit the real APIs (a handful of requests, with automatic retry/backoff), so avoid running them in tight loops against the free-tier quota.
 
 ### 4. Fetch data from a specific fetcher
 
-Each dataset has a fetcher under `datasets/<source>/`. The Fingrid fetchers all share the same constructor and request API; swap the class name in the snippet below.
+Each dataset has a fetcher under `src/fi_energy/datasets/<source>/`. The Fingrid fetchers all share the same constructor and request API; swap the class name in the snippet below.
 
 | Fetcher | Dataset | Series | Output column | Saved name |
 | --- | --- | --- | --- | --- |
@@ -111,7 +113,7 @@ from datetime import UTC, datetime
 
 from dotenv import load_dotenv
 
-from datasets import FetchRequest, FingridWindFetcher
+from fi_energy.datasets import FetchRequest, FingridWindFetcher
 
 # Explicit path: load_dotenv() cannot introspect a file path when run via stdin.
 load_dotenv(".env")
@@ -135,7 +137,7 @@ Notes:
 - Flow values follow Fingrid's sign convention: positive is transmission from Finland to the neighbouring zone, negative is import into Finland.
 - Multi-year ranges are paginated automatically and retried on Fingrid rate limits, so a 3-year window only needs one request object.
 - `fetch` always calls the remote API. `fetch_from_local` returns data from the bundled snapshot when it exists and falls back to `fetch` otherwise, so the same request works offline.
-- The bundled snapshots live at `datasets/fingrid/data/` (`wind_sample.parquet`, `wind_capacity_sample.parquet`, `consumption_sample.parquet`, `nuclear_sample.parquet`, `hydro_sample.parquet`, `se1_flow_sample.parquet`, `se3_flow_sample.parquet`, `ee_flow_sample.parquet`) and cover 2024-03-01 only. Override any of them with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
+- The bundled snapshots live at `src/fi_energy/datasets/fingrid/data/` (`wind_sample.parquet`, `wind_capacity_sample.parquet`, `consumption_sample.parquet`, `nuclear_sample.parquet`, `hydro_sample.parquet`, `se1_flow_sample.parquet`, `se3_flow_sample.parquet`, `ee_flow_sample.parquet`) and cover 2024-03-01 only. Override any of them with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 - Output tables are built against `fetcher.expected_schema`, so `table.schema == fetcher.expected_schema` holds for every fetch.
 - To persist a table, write it to Parquet with pyarrow: `import pyarrow.parquet as pq; pq.write_table(table, "data/wind.parquet")` (create `data/` first).
 
@@ -153,7 +155,7 @@ Notes:
 uv run python - <<'PY'
 from datetime import UTC, datetime
 
-from datasets import FetchRequest, FmiWeatherFetcher
+from fi_energy.datasets import FetchRequest, FmiWeatherFetcher
 
 request = FetchRequest(
     start_utc=datetime(2024, 3, 1, tzinfo=UTC),
@@ -173,7 +175,7 @@ Notes:
 - FMI caps one WFS request at 31 days for hourly weather and 7 days for radiation, so `FmiClient` chunks long windows automatically. A 3-year radiation pull issues about 157 requests per city and can take minutes.
 - Long downloads show a status tracker with one progress bar per stage (`weather`, `radiation`) on stderr: chunk count, percent, elapsed time, ETA, and observations so far. It is enabled automatically on an interactive terminal; pass `show_progress=True` to force it in logs or `show_progress=False` to silence it. `scripts/fetch_all.py` enables progress bars only in sequential mode (`--jobs 1`), because parallel bars would interleave.
 - Missing observations become null values in the output table.
-- `fetch_from_local` reads `datasets/fmi/data/<city>_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
+- `fetch_from_local` reads `src/fi_energy/datasets/fmi/data/<city>_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 
 #### Nord Pool FI spot prices
 
@@ -183,7 +185,7 @@ Notes:
 uv run python - <<'PY'
 from datetime import UTC, datetime
 
-from datasets import FetchRequest, NordPoolSpotFetcher
+from fi_energy.datasets import FetchRequest, NordPoolSpotFetcher
 
 request = FetchRequest(
     start_utc=datetime(2024, 3, 1, tzinfo=UTC),
@@ -202,7 +204,7 @@ Notes:
 - Finland switched its day-ahead market to 15-minute time units on 2025-10-01, and Energy-Charts returns quarter-hour prices from then on. The fetcher averages each hour's quarters into one `c/kWh` value (a missing quarter is ignored; an hour with no prices stays null), so the output remains hourly across the whole window.
 - Energy-Charts data is licensed for private and internal use; see the `license_info` field in API responses.
 - Missing prices become null values in the output table.
-- `fetch_from_local` reads `datasets/energy_charts/data/fi_spot_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
+- `fetch_from_local` reads `src/fi_energy/datasets/energy_charts/data/fi_spot_sample.parquet` and falls back to the remote API when that snapshot is missing. Override it with `local_path="path/to/snapshot.parquet"` or disable it with `local_path=None`.
 
 #### Full Phase 1 pull
 
@@ -243,12 +245,33 @@ uv run python scripts/fetch_all.py --years 2 --output-dir /tmp/fi-energy
 
 Bounds are ISO timestamps, interpreted as UTC when no offset is given, and rounded down to the hour. `--end` defaults to the current UTC hour, `--start` defaults to `--years` (3) before the end, and the window is half-open `[start_utc, end_utc)`. `--output-dir` is the base directory; each run writes to `<output-dir>/<window>/`. Sources are fetched concurrently with up to `--jobs` workers (default 4), with per-group caps: Fingrid series stay serial to respect the free-tier rate limit, up to three FMI cities run at once, and Energy-Charts is a single request. The FMI cities are scheduled first, so their multi-minute pulls overlap the Fingrid leg. `--jobs 1` restores a fully sequential pull and re-enables the FMI progress bars, which are suppressed when several sources run at once. `--skip-existing` reuses a source Parquet file that was written for the exact same window bounds, which resumes an interrupted pull without mixing in stale hours from a different trailing window; `--no-combined` skips the combined and cleaned outputs.
 
-The script exits immediately if `FINGRID_API_KEY` is missing. Individual source failures are recorded and the run continues; a partial run exits with status 1, writes `manifest.json` with the `failures` list, and skips the combined/cleaned tables. Every source table is checked for exact UTC hourly timestamps, duplicate timestamps, and rows outside the window. `combined/hourly.parquet` contains every hour in the window; missing observations become nulls for that source's columns, and FMI columns are prefixed by city (`helsinki_temperature_c`, etc.). `datasets/alignment.py` provides the reusable `trailing_window`, `hourly_index`, `validate_hourly_table`, `align_hourly`, `interpolate_short_gaps`, and `drop_incomplete_boundary_rows` helpers.
+The script exits immediately if `FINGRID_API_KEY` is missing. Individual source failures are recorded and the run continues; a partial run exits with status 1, writes `manifest.json` with the `failures` list, and skips the combined/cleaned tables. Every source table is checked for exact UTC hourly timestamps, duplicate timestamps, and rows outside the window. `combined/hourly.parquet` contains every hour in the window; missing observations become nulls for that source's columns, and FMI columns are prefixed by city (`helsinki_temperature_c`, etc.). `src/fi_energy/datasets/alignment.py` provides the reusable `trailing_window`, `hourly_index`, `validate_hourly_table`, `align_hourly`, `interpolate_short_gaps`, and `drop_incomplete_boundary_rows` helpers.
 
 The FMI leg is slower because FMI caps radiation requests at seven days; a 3-year city takes about five minutes (measured 5.2 minutes for Helsinki over 2022–2024), so with several workers the total run is roughly bounded by the slowest FMI city rather than the sum of all series. Fingrid series are fetched one at a time so the free-tier rate limit is not exceeded; a higher-tier key can raise `GROUP_LIMITS["fingrid"]` in the script. The spot leg is a single request and finishes in seconds.
 
+#### Phase 2 feature table
+
+[`scripts/build_features.py`](scripts/build_features.py) derives model features from the cleaned Phase 1 table and writes a timestamped feature table under `data/<window>/features/`:
+
+```text
+data/3y/features/
+├── hourly_features.parquet  # timestamp_utc + registered derived features
+└── manifest.json            # lineage, policy, null counts, and statistics
+```
+
+```bash
+uv run python scripts/build_features.py
+uv run python scripts/build_features.py --dry-run
+uv run python scripts/build_features.py --input data/3y/combined/hourly_clean.parquet \
+    --output data/3y/features/hourly_features.parquet
+```
+
+The first group contains `wind_penetration_ratio` (`wind_mw / consumption_mw`, the hourly share of consumption met by wind) and `wind_capacity_factor` (`wind_mw / wind_capacity_mw`). Negative wind readings are clipped to zero for the ratios because generation cannot be negative; the Phase 1 `wind_mw` column is left untouched and the correction count is recorded in the manifest. Null inputs propagate, and a zero denominator becomes null instead of infinity. Source columns are not duplicated — only `timestamp_utc` plus derived features are stored, so later feature groups extend the same table.
+
+Feature builders live in `src/fi_energy/features/`. Each group exposes a `FeatureSpec` registry (name, inputs, group, description) and a pure `add_*_features(table)` transform; `ALL_FEATURES` in `src/fi_energy/features/build.py` is the single registry that Phase 3's feature-ablation tiers select from.
+
 ### 5. Add a new fetcher
 
-1. For another Fingrid numeric series, subclass `FingridSeriesFetcher` and supply the dataset id, value column, schema, and local snapshot path (see `FingridNuclearFetcher`); it already implements `source_name`, `expected_schema`, `fetch`, and `fetch_from_local`. For other sources, create `datasets/<source>/<source>_fetcher.py` implementing the `DataSourceFetcher` protocol from `datasets/api.py`; reuse `datasets/utils.py` for window validation, resolution lookup, bucket averaging, and local Parquet loading.
-2. Export it from the subpackage's `__init__.py` and from `datasets/__init__.py`.
+1. For another Fingrid numeric series, subclass `FingridSeriesFetcher` and supply the dataset id, value column, schema, and local snapshot path (see `FingridNuclearFetcher`); it already implements `source_name`, `expected_schema`, `fetch`, and `fetch_from_local`. For other sources, create `src/fi_energy/datasets/<source>/<source>_fetcher.py` implementing the `DataSourceFetcher` protocol from `src/fi_energy/datasets/api.py`; reuse `src/fi_energy/datasets/utils.py` for window validation, resolution lookup, bucket averaging, and local Parquet loading.
+2. Export it from the subpackage's `__init__.py` and from `src/fi_energy/datasets/__init__.py`.
 3. Add an offline Parquet fixture for fetcher tests, serve scripted HTTP responses through `httpx.MockTransport` for client tests, and add a live test marked `@pytest.mark.integration` that skips when its credentials are missing (see `tests/test_fingrid_wind_fetcher.py`, `tests/test_fingrid_wind_capacity_fetcher.py`, `tests/test_fingrid_client.py`, and the `tests/test_fingrid_*_integration.py` files).

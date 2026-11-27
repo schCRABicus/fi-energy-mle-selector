@@ -7,7 +7,7 @@ import httpx
 import pytest
 from tenacity import wait_none
 
-from datasets import EnergyChartsClient
+from fi_energy.datasets import EnergyChartsClient
 
 START = datetime(2024, 3, 1, tzinfo=UTC)
 END = datetime(2024, 3, 2, tzinfo=UTC)

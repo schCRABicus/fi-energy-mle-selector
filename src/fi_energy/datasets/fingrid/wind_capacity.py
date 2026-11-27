@@ -4,20 +4,20 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from datasets.fingrid.client import FingridClient
-from datasets.fingrid.series_fetcher import FingridSeriesFetcher
+from fi_energy.datasets.fingrid.client import FingridClient
+from fi_energy.datasets.fingrid.series_fetcher import FingridSeriesFetcher
 
-DEFAULT_LOCAL_PATH = Path(__file__).parent / "data" / "wind_sample.parquet"
+DEFAULT_LOCAL_PATH = Path(__file__).parent / "data" / "wind_capacity_sample.parquet"
 
-WIND_SCHEMA = pa.schema([
+CAPACITY_SCHEMA = pa.schema([
     pa.field("timestamp_utc", pa.timestamp("us", tz="UTC"), nullable=False),
-    pa.field("wind_mw", pa.float32(), nullable=False),
+    pa.field("wind_capacity_mw", pa.float32(), nullable=False),
 ])
 
 
-class FingridWindFetcher(FingridSeriesFetcher):
+class FingridWindCapacityFetcher(FingridSeriesFetcher):
     """
-    Fetches Finnish wind power generation (MW) from Fingrid Open Data.
+    Fetches Finnish installed wind power capacity (MW) from Fingrid dataset 268.
 
     Samples are averaged into the bucket size given by ``FetchRequest.resolution``.
     """
@@ -25,7 +25,7 @@ class FingridWindFetcher(FingridSeriesFetcher):
     def __init__(
         self,
         api_key: str,
-        dataset_id: int = 75,
+        dataset_id: int = 268,
         *,
         client: FingridClient | None = None,
         local_path: str | Path | None = DEFAULT_LOCAL_PATH,
@@ -35,9 +35,9 @@ class FingridWindFetcher(FingridSeriesFetcher):
         super().__init__(
             api_key,
             dataset_id=dataset_id,
-            dataset_name="wind_production",
-            value_column="wind_mw",
-            schema=WIND_SCHEMA,
+            dataset_name="wind_capacity",
+            value_column="wind_capacity_mw",
+            schema=CAPACITY_SCHEMA,
             local_path=local_path,
             client=client,
             timeout=timeout,

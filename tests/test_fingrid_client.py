@@ -8,7 +8,7 @@ import httpx
 import pytest
 from tenacity import wait_none
 
-from datasets import FingridClient
+from fi_energy.datasets import FingridClient
 
 API_KEY = "test-api-key"
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)

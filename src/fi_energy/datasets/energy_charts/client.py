@@ -9,8 +9,8 @@ from typing import Any
 import httpx
 from tenacity import RetryCallState
 
-from datasets.http_client import HttpClient
-from datasets.utils import utc_window
+from fi_energy.datasets.http_client import HttpClient
+from fi_energy.datasets.utils import utc_window
 
 ENERGY_CHARTS_BASE_URL = "https://api.energy-charts.info/"
 PRICE_PATH = "price"
