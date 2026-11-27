@@ -1,29 +1,19 @@
 """Feature engineering: derived model inputs from the aligned hourly dataset."""
 
-from fi_energy.features.build import (
-    ALL_FEATURES,
-    build_feature_table,
-    describe_features,
-    feature_names,
-)
-from fi_energy.features.grid import (
-    GRID_RATIO_FEATURES,
-    GRID_RATIO_GROUP,
-    add_grid_ratio_features,
-    grid_ratio_diagnostics,
-)
+from fi_energy.features.build import build_feature_table, describe_features
+from fi_energy.features.catalog import DEFAULT_CATALOG, FeatureCatalog
+from fi_energy.features.group import FeatureGroup
 from fi_energy.features.ratios import safe_ratio
 from fi_energy.features.spec import FeatureSpec
+from fi_energy.features.wind_ratios import WindRatiosFeatureGroup
 
 __all__ = [
-    "ALL_FEATURES",
+    "DEFAULT_CATALOG",
+    "FeatureCatalog",
+    "FeatureGroup",
     "FeatureSpec",
-    "GRID_RATIO_FEATURES",
-    "GRID_RATIO_GROUP",
-    "add_grid_ratio_features",
+    "WindRatiosFeatureGroup",
     "build_feature_table",
     "describe_features",
-    "feature_names",
-    "grid_ratio_diagnostics",
     "safe_ratio",
 ]

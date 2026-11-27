@@ -10,16 +10,15 @@ __all__ = ["FeatureSpec"]
 @dataclass(frozen=True, slots=True)
 class FeatureSpec:
     """
-    Declares a derived feature's output name, inputs, group, and purpose.
+    Declares a derived feature's output name, inputs, and purpose.
 
-    A spec is metadata only: the computation lives in the feature module that
-    owns the group. ``inputs`` may name raw Phase 1 columns or columns produced
-    by an earlier feature group.
+    A spec is metadata only: the computation lives in the feature group that
+    owns it, and group membership is established by the catalog. ``inputs`` may
+    name raw Phase 1 columns or columns produced by an earlier feature group.
     """
 
     name: str
     inputs: tuple[str, ...]
-    group: str
     description: str
 
     def __post_init__(self) -> None:
@@ -48,10 +47,6 @@ class FeatureSpec:
             )
         object.__setattr__(self, "inputs", inputs)
 
-        if not self.group.strip():
-            raise ValueError(
-                f"Feature {self.name!r} must declare a non-empty group."
-            )
         if not self.description.strip():
             raise ValueError(
                 f"Feature {self.name!r} must declare a non-empty description."

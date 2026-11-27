@@ -106,7 +106,7 @@ def _schema_metadata(
     generated_at: datetime,
     description: dict[str, Any],
 ) -> dict[bytes, bytes]:
-    diagnostics = description["diagnostics"]
+    diagnostics = description["diagnostics"]["wind_ratios"]
     negative_min = diagnostics["negative_wind_min_mw"]
     values = {
         "feature_stage": "phase2",
@@ -147,7 +147,7 @@ def _write_manifest(
     generated_at: datetime,
     description: dict[str, Any],
 ) -> None:
-    diagnostics = description["diagnostics"]
+    diagnostics = description["diagnostics"]["wind_ratios"]
     manifest = {
         "generated_at_utc": _iso(generated_at),
         "status": "ok",
@@ -192,9 +192,7 @@ def _print_summary(
     input_path: Path,
     description: dict[str, Any],
 ) -> None:
-    groups = ", ".join(
-        sorted({spec["group"] for spec in description["features"]})
-    )
+    groups = ", ".join(description["groups"])
     print(
         f"source    {_display(input_path)}  {description['rows']:,} rows",
         flush=True,
@@ -205,7 +203,7 @@ def _print_summary(
         flush=True,
     )
 
-    diagnostics = description["diagnostics"]
+    diagnostics = description["diagnostics"]["wind_ratios"]
     negative_count = diagnostics["negative_wind_count"]
     if negative_count:
         print(

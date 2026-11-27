@@ -11,7 +11,6 @@ def make_spec(**overrides) -> FeatureSpec:
     values = {
         "name": "wind_penetration_ratio",
         "inputs": ("wind_mw", "consumption_mw"),
-        "group": "grid_ratios",
         "description": "Share of consumption met by wind.",
     }
     values.update(overrides)
@@ -23,7 +22,6 @@ def test_feature_spec_stores_metadata():
 
     assert spec.name == "wind_penetration_ratio"
     assert spec.inputs == ("wind_mw", "consumption_mw")
-    assert spec.group == "grid_ratios"
     assert spec.description == "Share of consumption met by wind."
 
 
@@ -50,7 +48,6 @@ def test_feature_spec_is_immutable():
         ({"inputs": ("wind_mw", "wind_mw")}, "duplicate inputs"),
         ({"inputs": ("wind_penetration_ratio",)}, "itself as an input"),
         ({"inputs": "wind_mw"}, "not a string"),
-        ({"group": "  "}, "non-empty group"),
         ({"description": ""}, "non-empty description"),
     ],
 )

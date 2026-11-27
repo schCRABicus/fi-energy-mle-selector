@@ -10,48 +10,31 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from fi_energy.datasets.alignment import TIMESTAMP_COLUMN, validate_hourly_table
-from fi_energy.features.grid import (
-    CONSUMPTION_COLUMN,
-    GRID_RATIO_FEATURES,
-    WIND_CAPACITY_COLUMN,
-    WIND_COLUMN,
-    add_grid_ratio_features,
-    grid_ratio_diagnostics,
-)
+from fi_energy.features.catalog import DEFAULT_CATALOG, FeatureCatalog
 
-__all__ = [
-    "ALL_FEATURES",
-    "build_feature_table",
-    "describe_features",
-    "feature_names",
-]
-
-# Group tuples are concatenated in application order as Phase 2 grows. The
-# interaction group will consume grid-ratio outputs, so grid ratios must stay
-# first.
-ALL_FEATURES = GRID_RATIO_FEATURES
+__all__ = ["build_feature_table", "describe_features"]
 
 _TIMESTAMP_TYPE = pa.timestamp("us", tz="UTC")
 
 
-def feature_names() -> tuple[str, ...]:
-    """Returns every registered feature name in application order."""
-    return tuple(spec.name for spec in ALL_FEATURES)
-
-
-def build_feature_table(source: pa.Table) -> pa.Table:
+def build_feature_table(
+    source: pa.Table,
+    catalog: FeatureCatalog = DEFAULT_CATALOG,
+) -> pa.Table:
     """
     Builds the timestamped feature table from the cleaned Phase 1 table.
 
-    The output contains ``timestamp_utc`` followed by every registered feature
-    column; source columns are not duplicated. Row count and timestamp order
-    match the input. The input table's schema metadata is preserved.
+    Feature groups are applied in ``catalog`` order, so a group can consume
+    features produced by any earlier group. The output contains
+    ``timestamp_utc`` followed by every feature in the catalog; source columns
+    are not duplicated. Row count and timestamp order match the input. The
+    input table's schema metadata is preserved.
 
     Raises:
         TypeError: If ``source`` is not a pyarrow Table.
         ValueError: If the source is empty or its timestamp index is missing,
             null, duplicated, off the UTC hour, or not ``timestamp[us, UTC]``.
-        RuntimeError: If a builder violates the output contract.
+        RuntimeError: If a group violates the output contract.
     """
     _require_table(source, label="source")
     if TIMESTAMP_COLUMN not in source.column_names:
@@ -75,37 +58,57 @@ def build_feature_table(source: pa.Table) -> pa.Table:
         label="source",
     )
 
-    features = add_grid_ratio_features(source).select(
-        [TIMESTAMP_COLUMN, *feature_names()]
-    )
-    _validate_output(source, features)
+    table = catalog.compute(source)
+    features = table.select([TIMESTAMP_COLUMN, *catalog.feature_names])
+    _validate_output(catalog, source, features)
     return features
 
 
-def describe_features(source: pa.Table, features: pa.Table) -> dict[str, Any]:
+def describe_features(
+    source: pa.Table,
+    features: pa.Table,
+    catalog: FeatureCatalog = DEFAULT_CATALOG,
+) -> dict[str, Any]:
     """
     Returns JSON-serialisable lineage, policy, and distribution diagnostics.
 
     ``source`` is the Phase 1 input; ``features`` is the output of
-    ``build_feature_table``. Per-feature statistics skip nulls.
+    ``build_feature_table`` built with the same ``catalog``. Per-feature
+    statistics skip nulls. Group membership is composed into each feature
+    entry; columns produced mid-pipeline are excluded from
+    ``input_null_counts`` because they do not exist in the source.
     """
     _require_table(source, label="source")
     _require_table(features, label="features")
+    input_columns = tuple(
+        dict.fromkeys(
+            name
+            for spec in catalog.specs
+            for name in spec.inputs
+            if name in source.column_names
+        )
+    )
     return {
         "rows": features.num_rows,
-        "feature_columns": list(feature_names()),
-        "features": [asdict(spec) for spec in ALL_FEATURES],
+        "groups": [group.name for group in catalog.groups],
+        "feature_columns": list(catalog.feature_names),
+        "features": [
+            {**asdict(spec), "group": group.name}
+            for group in catalog.groups
+            for spec in group.specs
+        ],
         "statistics": {
-            name: _statistics(features[name]) for name in feature_names()
+            name: _statistics(features[name])
+            for name in catalog.feature_names
         },
         "null_values": {
-            name: features[name].null_count for name in feature_names()
+            name: features[name].null_count
+            for name in catalog.feature_names
         },
         "input_null_counts": {
-            name: source[name].null_count
-            for name in (WIND_COLUMN, CONSUMPTION_COLUMN, WIND_CAPACITY_COLUMN)
+            name: source[name].null_count for name in input_columns
         },
-        "diagnostics": grid_ratio_diagnostics(source),
+        "diagnostics": catalog.diagnostics(source),
     }
 
 
@@ -118,8 +121,12 @@ def _statistics(column: pa.ChunkedArray) -> dict[str, float | int | None]:
     }
 
 
-def _validate_output(source: pa.Table, features: pa.Table) -> None:
-    expected_columns = [TIMESTAMP_COLUMN, *feature_names()]
+def _validate_output(
+    catalog: FeatureCatalog,
+    source: pa.Table,
+    features: pa.Table,
+) -> None:
+    expected_columns = [TIMESTAMP_COLUMN, *catalog.feature_names]
     if features.column_names != expected_columns:
         raise RuntimeError(
             f"Feature table columns {features.column_names} do not match "
@@ -130,7 +137,7 @@ def _validate_output(source: pa.Table, features: pa.Table) -> None:
             f"Feature table has {features.num_rows} rows but the source has "
             f"{source.num_rows}."
         )
-    for name in feature_names():
+    for name in catalog.feature_names:
         field = features.schema.field(name)
         if not field.type.equals(pa.float32()) or not field.nullable:
             raise RuntimeError(

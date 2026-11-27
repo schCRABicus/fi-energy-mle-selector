@@ -7,18 +7,19 @@ from datetime import UTC, datetime, timedelta
 import pyarrow as pa
 import pytest
 
-from fi_energy.features.build import ALL_FEATURES, build_feature_table, describe_features
-from fi_energy.features.grid import (
-    GRID_RATIO_FEATURES,
-    GRID_RATIO_GROUP,
-    add_grid_ratio_features,
-    grid_ratio_diagnostics,
+from fi_energy.features import (
+    DEFAULT_CATALOG,
+    WindRatiosFeatureGroup,
+    build_feature_table,
+    describe_features,
 )
 from fi_energy.features.spec import FeatureSpec
+from fi_energy.features.wind_ratios import WIND_RATIOS_GROUP
 
 START = datetime(2024, 1, 1, tzinfo=UTC)
 UTC_TIMESTAMP = pa.timestamp("us", tz="UTC")
 FEATURE_COLUMNS = ["wind_penetration_ratio", "wind_capacity_factor"]
+GROUP = WindRatiosFeatureGroup()
 
 
 def make_table(
@@ -47,10 +48,10 @@ def make_table(
     )
 
 
-def test_add_grid_ratio_features_appends_ratios_in_registry_order():
+def test_compute_appends_ratios_in_declaration_order():
     table = make_table([2500.0], [10000.0], [8000.0])
 
-    result = add_grid_ratio_features(table)
+    result = GROUP.compute(table)
 
     assert result.column_names == [*table.column_names, *FEATURE_COLUMNS]
     assert result["wind_penetration_ratio"].to_pylist() == [
@@ -61,13 +62,13 @@ def test_add_grid_ratio_features_appends_ratios_in_registry_order():
     ]
 
 
-def test_add_grid_ratio_features_preserves_source_columns_and_metadata():
+def test_compute_preserves_source_columns_and_metadata():
     table = make_table([2500.0], [10000.0], [8000.0]).replace_schema_metadata({
         b"k": b"v"
     })
     original_columns = table.column_names
 
-    result = add_grid_ratio_features(table)
+    result = GROUP.compute(table)
 
     assert result.column_names[: len(original_columns)] == original_columns
     assert result["timestamp_utc"].to_pylist() == table["timestamp_utc"].to_pylist()
@@ -77,14 +78,14 @@ def test_add_grid_ratio_features_preserves_source_columns_and_metadata():
     assert table.column_names == original_columns
 
 
-def test_add_grid_ratio_features_propagates_nulls_per_input():
+def test_compute_propagates_nulls_per_input():
     table = make_table(
         [None, 1000.0, 1000.0],
         [10000.0, None, 10000.0],
         [8000.0, 8000.0, None],
     )
 
-    result = add_grid_ratio_features(table)
+    result = GROUP.compute(table)
 
     assert result["wind_penetration_ratio"].to_pylist() == [
         None,
@@ -98,10 +99,10 @@ def test_add_grid_ratio_features_propagates_nulls_per_input():
     ]
 
 
-def test_add_grid_ratio_features_nulls_zero_denominators():
+def test_compute_nulls_zero_denominators():
     table = make_table([100.0, 100.0], [0.0, 10000.0], [0.0, 8000.0])
 
-    result = add_grid_ratio_features(table)
+    result = GROUP.compute(table)
 
     penetration = result["wind_penetration_ratio"].to_pylist()
     capacity_factor = result["wind_capacity_factor"].to_pylist()
@@ -115,14 +116,14 @@ def test_add_grid_ratio_features_nulls_zero_denominators():
     )
 
 
-def test_add_grid_ratio_features_clips_negative_wind_to_zero():
+def test_compute_clips_negative_wind_to_zero():
     table = make_table(
         [-32.4, -1.0, 15000.0],
         [10000.0, 10000.0, 10000.0],
         [8000.0, 8000.0, 8000.0],
     )
 
-    result = add_grid_ratio_features(table)
+    result = GROUP.compute(table)
 
     assert result["wind_penetration_ratio"].to_pylist()[:2] == [0.0, 0.0]
     assert result["wind_capacity_factor"].to_pylist()[:2] == [0.0, 0.0]
@@ -131,16 +132,16 @@ def test_add_grid_ratio_features_clips_negative_wind_to_zero():
     assert result["wind_mw"].to_pylist()[0] == pytest.approx(-32.4)
 
 
-def test_add_grid_ratio_features_keeps_null_wind_while_clipping_neighbours():
+def test_compute_keeps_null_wind_while_clipping_neighbours():
     table = make_table([None, -5.0], [10000.0, 10000.0], [8000.0, 8000.0])
 
-    result = add_grid_ratio_features(table)
+    result = GROUP.compute(table)
 
     assert result["wind_penetration_ratio"].to_pylist() == [None, 0.0]
     assert result["wind_capacity_factor"].to_pylist() == [None, 0.0]
 
 
-def test_add_grid_ratio_features_rejects_missing_input():
+def test_compute_rejects_missing_input():
     table = pa.table({
         "timestamp_utc": [START],
         "wind_mw": [1.0],
@@ -148,10 +149,10 @@ def test_add_grid_ratio_features_rejects_missing_input():
     })
 
     with pytest.raises(ValueError, match="missing required column"):
-        add_grid_ratio_features(table)
+        GROUP.compute(table)
 
 
-def test_add_grid_ratio_features_rejects_non_numeric_input():
+def test_compute_rejects_non_numeric_input():
     table = pa.table({
         "timestamp_utc": [START],
         "wind_mw": ["1.0"],
@@ -160,28 +161,28 @@ def test_add_grid_ratio_features_rejects_non_numeric_input():
     })
 
     with pytest.raises(ValueError, match="must be numeric"):
-        add_grid_ratio_features(table)
+        GROUP.compute(table)
 
 
-def test_add_grid_ratio_features_rejects_non_table():
+def test_compute_rejects_non_table():
     with pytest.raises(TypeError, match="pyarrow Table"):
-        add_grid_ratio_features({})  # type: ignore[arg-type]
+        GROUP.compute({})  # type: ignore[arg-type]
 
 
-def test_add_grid_ratio_features_rejects_existing_feature_columns():
+def test_compute_rejects_existing_feature_columns():
     table = make_table([1.0], [2.0], [3.0]).append_column(
         "wind_penetration_ratio",
         pa.array([0.5], type=pa.float32()),
     )
 
     with pytest.raises(ValueError, match="already has feature column"):
-        add_grid_ratio_features(table)
+        GROUP.compute(table)
 
 
-def test_add_grid_ratio_features_handles_an_empty_table():
+def test_compute_handles_an_empty_table():
     table = make_table([], [], [])
 
-    result = add_grid_ratio_features(table)
+    result = GROUP.compute(table)
 
     assert result.num_rows == 0
     assert result.schema.field("wind_penetration_ratio").type == pa.float32()
@@ -189,16 +190,22 @@ def test_add_grid_ratio_features_handles_an_empty_table():
     assert result["wind_penetration_ratio"].to_pylist() == []
 
 
-def test_grid_ratio_registry_metadata():
-    assert ALL_FEATURES == GRID_RATIO_FEATURES
-    assert [spec.name for spec in GRID_RATIO_FEATURES] == FEATURE_COLUMNS
-    assert all(isinstance(spec, FeatureSpec) for spec in GRID_RATIO_FEATURES)
-    assert all(
-        spec.group == GRID_RATIO_GROUP for spec in GRID_RATIO_FEATURES
+def test_registry_metadata():
+    assert len(DEFAULT_CATALOG.groups) == 1
+    assert isinstance(DEFAULT_CATALOG.groups[0], WindRatiosFeatureGroup)
+    assert DEFAULT_CATALOG.groups[0].name == WIND_RATIOS_GROUP == "wind_ratios"
+    assert DEFAULT_CATALOG.specs == WindRatiosFeatureGroup.specs
+    assert [spec.name for spec in DEFAULT_CATALOG.specs] == FEATURE_COLUMNS
+    assert all(isinstance(spec, FeatureSpec) for spec in DEFAULT_CATALOG.specs)
+    assert GROUP.feature_names == tuple(FEATURE_COLUMNS)
+    assert GROUP.inputs == (
+        "wind_mw",
+        "consumption_mw",
+        "wind_capacity_mw",
     )
-    assert GRID_RATIO_FEATURES[0].inputs == ("wind_mw", "consumption_mw")
-    assert GRID_RATIO_FEATURES[1].inputs == ("wind_mw", "wind_capacity_mw")
-    assert all(spec.description.strip() for spec in GRID_RATIO_FEATURES)
+    assert DEFAULT_CATALOG.specs[0].inputs == ("wind_mw", "consumption_mw")
+    assert DEFAULT_CATALOG.specs[1].inputs == ("wind_mw", "wind_capacity_mw")
+    assert all(spec.description.strip() for spec in DEFAULT_CATALOG.specs)
 
 
 def test_build_feature_table_selects_timestamp_and_features():
@@ -307,12 +314,21 @@ def test_describe_features_reports_policy_and_statistics():
     description = describe_features(table, features)
 
     assert description["rows"] == 3
+    assert description["groups"] == ["wind_ratios"]
     assert description["feature_columns"] == FEATURE_COLUMNS
-    assert description["diagnostics"]["negative_wind_count"] == 1
-    assert description["diagnostics"]["negative_wind_min_mw"] == pytest.approx(
-        -5.0
-    )
-    assert description["diagnostics"]["zero_denominators"] == {
+    assert [entry["name"] for entry in description["features"]] == FEATURE_COLUMNS
+    assert [entry["group"] for entry in description["features"]] == [
+        "wind_ratios",
+        "wind_ratios",
+    ]
+    assert [entry["inputs"] for entry in description["features"]] == [
+        ("wind_mw", "consumption_mw"),
+        ("wind_mw", "wind_capacity_mw"),
+    ]
+    wind_diagnostics = description["diagnostics"]["wind_ratios"]
+    assert wind_diagnostics["negative_wind_count"] == 1
+    assert wind_diagnostics["negative_wind_min_mw"] == pytest.approx(-5.0)
+    assert wind_diagnostics["zero_denominators"] == {
         "wind_penetration_ratio": 1,
         "wind_capacity_factor": 1,
     }
@@ -346,14 +362,14 @@ def test_describe_features_reports_policy_and_statistics():
     json.dumps(description)
 
 
-def test_grid_ratio_diagnostics_summarises_the_raw_inputs():
+def test_wind_ratios_diagnostics_summarises_the_raw_inputs():
     table = make_table(
         [-32.4, -1.0, 1000.0],
         [0.0, 10000.0, 10000.0],
         [0.0, 0.0, 8000.0],
     )
 
-    diagnostics = grid_ratio_diagnostics(table)
+    diagnostics = GROUP.diagnostics(table)
 
     assert diagnostics["negative_wind_count"] == 2
     assert diagnostics["negative_wind_min_mw"] == pytest.approx(-32.4)
