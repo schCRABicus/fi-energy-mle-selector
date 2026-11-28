@@ -39,7 +39,7 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │       ├── features/         # Phase 2 feature engineering (models/simulator planned)
 │       └── contracts/        # Retail offer domain model + sahkonhinta.fi adapter
 ├── tests/            # Offline unit tests and live API integration tests
-├── scripts/          # Reproducible pipelines (Phase 1 pull, Phase 2 features & offers)
+├── scripts/          # Reproducible pipelines (Phase 1 pull/refresh, Phase 2 features, dataset & offers)
 ├── configs/          # Retail offer catalog (household load profiles planned)
 ├── data/             # Hourly datasets, feature tables, and manifests (git-ignored)
 ├── pyproject.toml    # Project metadata, dependencies, packaging, pytest configuration
@@ -229,9 +229,11 @@ data/
     │   ├── vaasa_weather.parquet
     │   └── oulu_weather.parquet
     ├── energy_charts/spot_price_fi.parquet
-    └── combined/
-        ├── hourly.parquet        # raw outer join: every window hour
-        └── hourly_clean.parquet  # short gaps filled, boundary rows trimmed
+    ├── combined/
+    │   ├── hourly.parquet        # raw outer join: every window hour
+    │   └── hourly_clean.parquet  # short gaps filled, boundary rows trimmed
+    ├── features/                 # Phase 2 derived feature table (build_features.py)
+    └── dataset/                  # Phase 2 training dataset (build_dataset.py)
 ```
 
 The window directory is `3y` for a three-calendar-year window, or the exact hour count such as `24h` for other ranges. Dataset filenames are purpose-based; the manifest keeps the fetcher lineage (e.g. `fingrid_75`) alongside the clear name. `combined/hourly_clean.parquet` is the finalized Phase 1 table: leading and trailing rows where any feature is null are dropped, then interior runs of one or two missing hours (a gap shorter than three hours) are filled by linear interpolation. Longer interior gaps stay null; `manifest.json` records the filled counts, boundary rows removed, and remaining nulls per column.
@@ -249,6 +251,17 @@ Bounds are ISO timestamps, interpreted as UTC when no offset is given, and round
 The script exits immediately if `FINGRID_API_KEY` is missing. Individual source failures are recorded and the run continues; a partial run exits with status 1, writes `manifest.json` with the `failures` list, and skips the combined/cleaned tables. Every source table is checked for exact UTC hourly timestamps, duplicate timestamps, and rows outside the window. `combined/hourly.parquet` contains every hour in the window; missing observations become nulls for that source's columns, and FMI columns are prefixed by city (`helsinki_temperature_c`, etc.). `src/fi_energy/datasets/alignment.py` provides the reusable `trailing_window`, `hourly_index`, `validate_hourly_table`, `align_hourly`, `interpolate_short_gaps`, and `drop_incomplete_boundary_rows` helpers.
 
 The FMI leg is slower because FMI caps radiation requests at seven days; a 3-year city takes about five minutes (measured 5.2 minutes for Helsinki over 2022–2024), so with several workers the total run is roughly bounded by the slowest FMI city rather than the sum of all series. Fingrid series are fetched one at a time so the free-tier rate limit is not exceeded; a higher-tier key can raise `GROUP_LIMITS["fingrid"]` in the script. The spot leg is a single request and finishes in seconds.
+
+#### Refreshing an existing window
+
+[`scripts/refresh_data.py`](scripts/refresh_data.py) appends only the hours after the last cleaned row instead of re-pulling the whole window. It fetches the same twelve sources for `[last_cleaned_hour + 1h, current UTC hour)`, overwrites any existing source rows from that cutoff onward, rebuilds `combined/hourly.parquet` and `combined/hourly_clean.parquet`, and rewrites `manifest.json` with the new window and refresh metadata.
+
+```bash
+uv run python scripts/refresh_data.py                       # append everything since the last cleaned hour
+uv run python scripts/refresh_data.py --start 2026-11-21T19:00:00Z --end 2026-11-28T13:00:00Z
+```
+
+The refresh must refetch a little earlier than the old tail: a source outage can make the cleaned table end earlier than the raw data, and `drop_incomplete_boundary_rows` trims that boundary. In the 2026-11-28 refresh the raw sources already covered 2026-11-26 04:00, but the cleaned table stopped at 2026-11-21 18:00 because Helsinki Kaisaniemi's wind sensor went silent at 2026-11-21 19:00. The script detected the null wind speeds and filled those hours from FMI station Harmaja (100969), the nearest Helsinki station with a complete record; only gaps are filled and the count (`helsinki_wind_fallback_values`) is recorded in the manifest. Existing values are never overwritten. The resulting cleaned table runs from 2023-11-26 05:00 to 2026-11-28 11:00 UTC.
 
 #### Phase 2 feature table
 
@@ -276,6 +289,42 @@ The interaction group multiplies `wind_penetration_ratio` by `heating_degree_hou
 The calendar group converts each UTC timestamp to `Europe/Helsinki` local time before extracting calendar parts, because Finnish demand and day-ahead prices follow local wall-clock time and public holidays are local calendar days. `sin_hour`/`cos_hour` encode hour of day on a 24-hour circle (midnight at angle zero), `sin_month`/`cos_month` encode month on a 12-month circle (January at angle zero), `is_weekend` flags Saturday and Sunday, and `is_fi_public_holiday` flags Finnish public holidays from the `holidays` package (`country="FI"`). All six are stored as `float32` 0/1 flags or sine/cosine values; the timezone and holiday country are recorded in the manifest and Parquet metadata.
 
 Feature groups live in `src/fi_energy/features/groups/`; the spec/group/catalog DSL and build helpers stay at the package root. A `FeatureSpec` carries per-feature metadata (name, inputs, description) and a concrete `FeatureGroup` declares its `name` plus a tuple of specs, implements `_compute(table)`, and inherits `compute()`, which validates the inputs, enforces an append-only nullable-`float32` output contract, and owns the group's diagnostics. Group membership is not duplicated on the spec; `FeatureCatalog` in `src/fi_energy/features/catalog.py` owns it. The catalog is an ordered, validated set of groups: it rejects duplicate group or feature names and rejects a group that consumes a feature produced later, so a group may consume features from any earlier group. `DEFAULT_CATALOG` lists the groups used by the default build, `catalog.compute(table)` applies them in order, and `catalog.subset(...)` selects groups for Phase 3's ablation tiers while re-checking dependencies. Adding a group means adding one module and one entry to `DEFAULT_CATALOG`.
+
+#### Training dataset (24 features + next-hour target)
+
+[`scripts/build_dataset.py`](scripts/build_dataset.py) assembles the complete training table from the cleaned Phase 1 output. `src/fi_energy/features/dataset.py` defines exactly 24 features:
+
+| Group | Columns |
+| --- | --- |
+| Raw fundamentals (12) | `wind_mw`, `wind_capacity_mw`, `consumption_mw`, `nuclear_mw`, `hydro_mw`, `se1_flow_mw`, `se3_flow_mw`, `ee_flow_mw`, `helsinki_temperature_c`, `vaasa_temperature_c`, `oulu_temperature_c`, `helsinki_radiation_wm2` |
+| Derived (12) | `wind_penetration_ratio`, `wind_capacity_factor`, `heating_degree_hours`, `temp_rolling_24h`, `temp_rolling_72h`, `wind_temp_interaction`, `sin_hour`, `cos_hour`, `sin_month`, `cos_month`, `is_weekend`, `is_fi_public_holiday` |
+
+The target is `spot_price_next_hour_c_kwh`: the FI day-ahead price at `timestamp + 1 hour`, VAT-exclusive in `c/kWh`. Every feature is observed at `timestamp`, so the final source row has no label and is dropped. Sparse wind-speed columns are deliberately excluded from the 24 features so that complete-case filtering keeps every recent hour.
+
+```text
+data/3y/dataset/
+├── hourly_dataset.parquet  # timestamp_utc + 24 features + target (zstd)
+├── hourly_dataset.csv      # optional CSV copy (--csv)
+└── manifest.json           # lineage, target definition, row counts, checks, statistics
+```
+
+```bash
+uv run python scripts/build_dataset.py            # Parquet only
+uv run python scripts/build_dataset.py --csv      # Parquet + CSV
+uv run python scripts/build_dataset.py --input data/3y/combined/hourly_clean.parquet \
+    --output data/3y/dataset/hourly_dataset.parquet
+```
+
+The builder uses a strict complete-case policy: any row with a null, NaN, or infinite feature or target is dropped, and no imputation happens at this stage. The current build keeps 26,047 of 26,359 cleaned rows: 71 leading rows lack a full 72-hour thermal window, the final row has no next-hour price, and 240 interior rows fall in source outages (Helsinki temperature and radiation, Vaasa and Oulu temperature, nuclear/hydro, and four hours of wind capacity). Timestamps stay unique and ascending; the gaps left by dropped rows are visible in the timestamp deltas.
+
+`build_training_dataset` returns a `DatasetBuild` with the table and four leakage checks, and raises if any check fails:
+
+- `target_absent_from_features` — neither `spot_price_c_kwh` nor the next-hour target appears among the 24 features.
+- `target_absent_from_specs` — no feature spec consumes either price column.
+- `features_ignore_future_rows` — recomputing every derived feature on a truncated prefix reproduces the full-table values exactly.
+- `target_is_next_hour` — the target array equals the spot price shifted one hour, with a null in the final row.
+
+The Parquet file also carries the feature list, target definition, and check results as `fi_energy.*` schema metadata; `manifest.json` adds per-feature null counts, min/mean/max, and the complete-case policy.
 
 #### Retail offer catalog
 

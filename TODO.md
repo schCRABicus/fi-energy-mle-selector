@@ -15,7 +15,7 @@
 - [x] Compute thermal demand features: `heating_degree_hours` ($\max(0, 17^\circ\text{C} - T_{\text{helsinki}})$), `temp_rolling_24h`, and `temp_rolling_72h`.
 - [x] Compute interaction feature `wind_temp_interaction` (`wind_penetration_ratio * heating_degree_hours`) to isolate cold, windless scarcity hours.
 - [x] Compute cyclical time encodings (`sin_hour`, `cos_hour`, `sin_month`, `cos_month`), `is_weekend`, and `is_fi_public_holiday` using the Python `holidays` package (`country='FI'`).
-- [ ] Save the complete 24-feature + target dataset to a clean Parquet/CSV file and verify zero NaNs and zero future-target leakage.
+- [x] Save the complete 24-feature + target dataset to a clean Parquet/CSV file and verify zero NaNs and zero future-target leakage.
 - [x] Digitize 6–8 real retail offers from `sahkonhinta.fi` (Fixed, 100% Wind Fixed, Spot, 100% Wind Spot, and Hybrid/*kulutusvaikutus*) into a structured JSON config.
 - [ ] Create two standard Finnish hourly load profiles (`hourly_kwh`): a 2,500 kWh/yr apartment and an 18,000 kWh/yr electrically heated detached house.
 
