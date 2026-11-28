@@ -36,10 +36,11 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │       │   │   └── data/     # Committed 1-day Parquet snapshots for offline runs
 │       │   └── energy_charts/# Energy-Charts client and Nord Pool spot-price fetcher
 │       │       └── data/     # Committed 1-day Parquet snapshots for offline runs
-│       └── features/         # Phase 2 feature engineering (models/simulator planned)
+│       ├── features/         # Phase 2 feature engineering (models/simulator planned)
+│       └── contracts/        # Retail offer domain model + sahkonhinta.fi adapter
 ├── tests/            # Offline unit tests and live API integration tests
-├── scripts/          # Reproducible pipelines (Phase 1 pull, Phase 2 feature build)
-├── configs/          # (planned) retail contract definitions & household load profiles
+├── scripts/          # Reproducible pipelines (Phase 1 pull, Phase 2 features & offers)
+├── configs/          # Retail offer catalog (household load profiles planned)
 ├── data/             # Hourly datasets, feature tables, and manifests (git-ignored)
 ├── pyproject.toml    # Project metadata, dependencies, packaging, pytest configuration
 ├── uv.lock           # Locked dependency versions
@@ -275,6 +276,19 @@ The interaction group multiplies `wind_penetration_ratio` by `heating_degree_hou
 The calendar group converts each UTC timestamp to `Europe/Helsinki` local time before extracting calendar parts, because Finnish demand and day-ahead prices follow local wall-clock time and public holidays are local calendar days. `sin_hour`/`cos_hour` encode hour of day on a 24-hour circle (midnight at angle zero), `sin_month`/`cos_month` encode month on a 12-month circle (January at angle zero), `is_weekend` flags Saturday and Sunday, and `is_fi_public_holiday` flags Finnish public holidays from the `holidays` package (`country="FI"`). All six are stored as `float32` 0/1 flags or sine/cosine values; the timezone and holiday country are recorded in the manifest and Parquet metadata.
 
 Feature groups live in `src/fi_energy/features/groups/`; the spec/group/catalog DSL and build helpers stay at the package root. A `FeatureSpec` carries per-feature metadata (name, inputs, description) and a concrete `FeatureGroup` declares its `name` plus a tuple of specs, implements `_compute(table)`, and inherits `compute()`, which validates the inputs, enforces an append-only nullable-`float32` output contract, and owns the group's diagnostics. Group membership is not duplicated on the spec; `FeatureCatalog` in `src/fi_energy/features/catalog.py` owns it. The catalog is an ordered, validated set of groups: it rejects duplicate group or feature names and rejects a group that consumes a feature produced later, so a group may consume features from any earlier group. `DEFAULT_CATALOG` lists the groups used by the default build, `catalog.compute(table)` applies them in order, and `catalog.subset(...)` selects groups for Phase 3's ablation tiers while re-checking dependencies. Adding a group means adding one module and one entry to `DEFAULT_CATALOG`.
+
+#### Retail offer catalog
+
+[`configs/offers.json`](configs/offers.json) holds eight household offers digitized from the sahkonhinta.fi consumer API (operated by Energiavirasto): two fixed, two 100% wind fixed, one spot, one 100% wind spot, and two hybrid *kulutusvaikutus* products. Each offer records its provider, contract term, energy source, prices, and provenance (product id, product URL, raw API pricing model); the top level records the postal code and retrieval timestamp.
+
+```bash
+uv run python scripts/digitize_offers.py                       # live API, postal code 00100
+uv run python scripts/digitize_offers.py --input /tmp/products.json \
+    --retrieved-at 2026-11-28T12:48:50Z
+```
+
+The script fetches `/api/productlist/{postal_code}` (or reads a saved payload) and keeps the curated product ids in `SELECTION`, paired with the comparison category each one represents. `src/fi_energy/contracts/offers.py` defines the strict schema: top-level `schema_version`, `source`, and `offers`. Prices are VAT-inclusive — monthly fee in EUR/month, fixed and hybrid energy prices in c/kWh, and spot retailer margin in c/kWh. Hybrid offers carry a `consumption_impact` block defining `spot_timing_deviation` (consumption-weighted spot price minus the monthly average spot price) with a factor, optional estimate and typical range, and an optional cap. `load_offer_catalog` validates the file and returns typed domain objects for the Phase 4 cost calculators; the adapter rejects discounted listings, company-only products, and any price component other than exactly one `Monthly` plus one `General`.
+
 
 ### 5. Add a new fetcher
 

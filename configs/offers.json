@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "source": {
+    "name": "sahkonhinta.fi",
+    "operator": "Energiavirasto (Energy Authority of Finland)",
+    "api_url": "https://ev-shv-prod-app-wa-consumerapi1.azurewebsites.net",
+    "postal_code": "00100",
+    "retrieved_at": "2026-11-28T12:48:50Z"
+  },
+  "offers": [
+    {
+      "id": "helen-oy-maaraaikainen-perussahko-12-kk",
+      "provider": "Helen Oy",
+      "product_name": "Määräaikainen Perussähkö (12 kk)",
+      "category": "fixed",
+      "pricing_model": "fixed",
+      "contract": {
+        "type": "fixed_term",
+        "term_months": 12
+      },
+      "energy_source": {
+        "wind_share_pct": 0.0,
+        "renewable_share_pct": 0.0
+      },
+      "prices": {
+        "monthly_fee_eur": 5.99,
+        "energy_price_c_kwh": 12.07,
+        "spot_margin_c_kwh": null
+      },
+      "consumption_impact": null,
+      "max_annual_consumption_kwh": 100000.0,
+      "vat_included": true,
+      "source": {
+        "product_id": "95b5e00e-7172-4c23-99aa-d55cbd854b47",
+        "product_url": "https://www.helen.fi/sahko/sahkosopimus/maaraaikainen-perussahko",
+        "api_pricing_model": "FixedPrice"
+      }
+    },
+    {
+      "id": "korpelan-energia-oy-korpela-kesto-kiintea-24-kk",
+      "provider": "Korpelan Energia Oy",
+      "product_name": "Korpela Kesto Kiinteä 24 kk",
+      "category": "fixed",
+      "pricing_model": "fixed",
+      "contract": {
+        "type": "fixed_term",
+        "term_months": 24
+      },
+      "energy_source": {
+        "wind_share_pct": 0.0,
+        "renewable_share_pct": 0.0
+      },
+      "prices": {
+        "monthly_fee_eur": 4.5,
+        "energy_price_c_kwh": 9.85,
+        "spot_margin_c_kwh": null
+      },
+      "consumption_impact": null,
+      "max_annual_consumption_kwh": 100000.0,
+      "vat_included": true,
+      "source": {
+        "product_id": "8a4df42f-6d84-45b8-bfea-cdde3d131b60",
+        "product_url": "https://www.korpelanvoima.fi/sahkosopimukset/",
+        "api_pricing_model": "FixedPrice"
+      }
+    },
+    {
+      "id": "porvoon-energia-oy-wind-12-kk-kotimainen-tuulisahko",
+      "provider": "Porvoon Energia Oy",
+      "product_name": "WIND 12 kk, kotimainen tuulisähkö",
+      "category": "wind_fixed",
+      "pricing_model": "fixed",
+      "contract": {
+        "type": "fixed_term",
+        "term_months": 12
+      },
+      "energy_source": {
+        "wind_share_pct": 100.0,
+        "renewable_share_pct": 100.0
+      },
+      "prices": {
+        "monthly_fee_eur": 3.9,
+        "energy_price_c_kwh": 12.6,
+        "spot_margin_c_kwh": null
+      },
+      "consumption_impact": null,
+      "max_annual_consumption_kwh": 150000.0,
+      "vat_included": true,
+      "source": {
+        "product_id": "8873bd98-9d7d-4c01-94e5-e33187a44b9a",
+        "product_url": "pbe.fi//fi/sahko/sahkosopimukset/",
+        "api_pricing_model": "FixedPrice"
+      }
+    },
+    {
+      "id": "vaasan-sahko-myynti-oy-tuulisahko-yleissahko",
+      "provider": "Vaasan Sähkö Myynti Oy",
+      "product_name": "Tuulisähkö (yleissähkö)",
+      "category": "wind_fixed",
+      "pricing_model": "fixed",
+      "contract": {
+        "type": "open_ended",
+        "term_months": null
+      },
+      "energy_source": {
+        "wind_share_pct": 100.0,
+        "renewable_share_pct": 100.0
+      },
+      "prices": {
+        "monthly_fee_eur": 4.9,
+        "energy_price_c_kwh": 13.12,
+        "spot_margin_c_kwh": null
+      },
+      "consumption_impact": null,
+      "max_annual_consumption_kwh": 100000.0,
+      "vat_included": true,
+      "source": {
+        "product_id": "bcbbd0bd-b7fb-4690-a468-57bc1df203d0",
+        "product_url": "https://www.vaasansahko.fi/sahkosopimus/",
+        "api_pricing_model": "FixedPrice"
+      }
+    },
+    {
+      "id": "helen-oy-porssisahko",
+      "provider": "Helen Oy",
+      "product_name": "Pörssisähkö",
+      "category": "spot",
+      "pricing_model": "spot",
+      "contract": {
+        "type": "open_ended",
+        "term_months": null
+      },
+      "energy_source": {
+        "wind_share_pct": 0.0,
+        "renewable_share_pct": 0.0
+      },
+      "prices": {
+        "monthly_fee_eur": 4.96,
+        "energy_price_c_kwh": null,
+        "spot_margin_c_kwh": 0.49
+      },
+      "consumption_impact": null,
+      "max_annual_consumption_kwh": 300000.0,
+      "vat_included": true,
+      "source": {
+        "product_id": "167344b3-be87-493a-9040-b11ca5de9342",
+        "product_url": "https://www.helen.fi/sahko/sahkosopimus/porssisahko",
+        "api_pricing_model": "Spot"
+      }
+    },
+    {
+      "id": "nurmijarven-sahko-oy-porssisahko-tuuli",
+      "provider": "Nurmijärven Sähkö Oy",
+      "product_name": "Pörssisähkö Tuuli",
+      "category": "wind_spot",
+      "pricing_model": "spot",
+      "contract": {
+        "type": "open_ended",
+        "term_months": null
+      },
+      "energy_source": {
+        "wind_share_pct": 100.0,
+        "renewable_share_pct": 100.0
+      },
+      "prices": {
+        "monthly_fee_eur": 4.05,
+        "energy_price_c_kwh": null,
+        "spot_margin_c_kwh": 1.6
+      },
+      "consumption_impact": null,
+      "max_annual_consumption_kwh": null,
+      "vat_included": true,
+      "source": {
+        "product_id": "95457cac-4a87-4244-a7e9-92bbf7ab4c80",
+        "product_url": null,
+        "api_pricing_model": "Spot"
+      }
+    },
+    {
+      "id": "oomi-oy-oomi-jousto-12-kk",
+      "provider": "Oomi Oy",
+      "product_name": "Oomi Jousto 12 kk",
+      "category": "hybrid",
+      "pricing_model": "hybrid",
+      "contract": {
+        "type": "fixed_term",
+        "term_months": 12
+      },
+      "energy_source": {
+        "wind_share_pct": 0.0,
+        "renewable_share_pct": 0.0
+      },
+      "prices": {
+        "monthly_fee_eur": 5.9,
+        "energy_price_c_kwh": 10.49,
+        "spot_margin_c_kwh": null
+      },
+      "consumption_impact": {
+        "definition": "spot_timing_deviation",
+        "factor": 1.0,
+        "estimated_c_kwh": 0.05,
+        "typical_range_c_kwh": [
+          -3.9,
+          1.6
+        ],
+        "cap_c_kwh": null
+      },
+      "max_annual_consumption_kwh": 100000.0,
+      "vat_included": true,
+      "source": {
+        "product_id": "7468ad32-2f7b-4daa-bcb8-2cfb69a76384",
+        "product_url": "www.oomi.fi",
+        "api_pricing_model": "Hybrid"
+      }
+    },
+    {
+      "id": "keravan-energia-oy-joustosahko-luonnonvoima-12-kk",
+      "provider": "Keravan Energia Oy",
+      "product_name": "Joustosähkö luonnonvoima 12 kk",
+      "category": "hybrid",
+      "pricing_model": "hybrid",
+      "contract": {
+        "type": "fixed_term",
+        "term_months": 12
+      },
+      "energy_source": {
+        "wind_share_pct": 0.0,
+        "renewable_share_pct": 100.0
+      },
+      "prices": {
+        "monthly_fee_eur": 5.5,
+        "energy_price_c_kwh": 10.7,
+        "spot_margin_c_kwh": null
+      },
+      "consumption_impact": {
+        "definition": "spot_timing_deviation",
+        "factor": 1.0,
+        "estimated_c_kwh": null,
+        "typical_range_c_kwh": [
+          -3.0,
+          3.0
+        ],
+        "cap_c_kwh": null
+      },
+      "max_annual_consumption_kwh": null,
+      "vat_included": true,
+      "source": {
+        "product_id": "57d99274-807e-4c1e-a9d1-a7fde923f327",
+        "product_url": "https://portal.keravanenergia.fi/fi-fi/contracts/sign?productId=3745",
+        "api_pricing_model": "Hybrid"
+      }
+    }
+  ]
+}
