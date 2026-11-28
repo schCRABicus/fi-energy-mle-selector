@@ -12,7 +12,7 @@ from fi_energy.features import (
     build_feature_table,
     describe_features,
 )
-from fi_energy.features.thermal_demand import (
+from fi_energy.features.groups.thermal_demand import (
     HEATING_BASE_TEMPERATURE_C,
     HEATING_DEGREE_HOURS,
     TEMP_ROLLING_24H,

@@ -12,12 +12,12 @@ from fi_energy.features import (
     build_feature_table,
     describe_features,
 )
-from fi_energy.features.interactions import (
+from fi_energy.features.groups.interactions import (
     INTERACTIONS_GROUP,
     WIND_TEMP_INTERACTION,
 )
-from fi_energy.features.thermal_demand import HEATING_DEGREE_HOURS
-from fi_energy.features.wind_ratios import WIND_PENETRATION_RATIO
+from fi_energy.features.groups.thermal_demand import HEATING_DEGREE_HOURS
+from fi_energy.features.groups.wind_ratios import WIND_PENETRATION_RATIO
 
 START = datetime(2024, 1, 1, tzinfo=UTC)
 UTC_TIMESTAMP = pa.timestamp("us", tz="UTC")

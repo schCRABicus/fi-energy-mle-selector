@@ -7,8 +7,8 @@ import pyarrow.compute as pc
 
 from fi_energy.features.group import FeatureGroup
 from fi_energy.features.spec import FeatureSpec
-from fi_energy.features.thermal_demand import HEATING_DEGREE_HOURS
-from fi_energy.features.wind_ratios import WIND_PENETRATION_RATIO
+from fi_energy.features.groups.thermal_demand import HEATING_DEGREE_HOURS
+from fi_energy.features.groups.wind_ratios import WIND_PENETRATION_RATIO
 
 __all__ = ["InteractionFeatureGroup"]
 

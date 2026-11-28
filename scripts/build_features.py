@@ -13,8 +13,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from fi_energy.features import build_feature_table, describe_features
-from fi_energy.features.calendar import HOLIDAY_COUNTRY, LOCAL_TIMEZONE
-from fi_energy.features.thermal_demand import HEATING_BASE_TEMPERATURE_C
+from fi_energy.features.groups.calendar import HOLIDAY_COUNTRY, LOCAL_TIMEZONE
+from fi_energy.features.groups.thermal_demand import HEATING_BASE_TEMPERATURE_C
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -13,7 +13,7 @@ from fi_energy.features import (
     build_feature_table,
     describe_features,
 )
-from fi_energy.features.calendar import (
+from fi_energy.features.groups.calendar import (
     CALENDAR_GROUP,
     COS_HOUR,
     COS_MONTH,

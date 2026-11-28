@@ -15,7 +15,7 @@ from fi_energy.features import (
     describe_features,
 )
 from fi_energy.features.spec import FeatureSpec
-from fi_energy.features.wind_ratios import WIND_RATIOS_GROUP
+from fi_energy.features.groups.wind_ratios import WIND_RATIOS_GROUP
 
 START = datetime(2024, 1, 1, tzinfo=UTC)
 UTC_TIMESTAMP = pa.timestamp("us", tz="UTC")
