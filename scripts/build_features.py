@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from fi_energy.features import build_feature_table, describe_features
+from fi_energy.features.calendar import HOLIDAY_COUNTRY, LOCAL_TIMEZONE
 from fi_energy.features.thermal_demand import HEATING_BASE_TEMPERATURE_C
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,6 +111,7 @@ def _schema_metadata(
     diagnostics = description["diagnostics"]
     wind = diagnostics["wind_ratios"]
     thermal = diagnostics["thermal_demand"]
+    calendar = diagnostics["calendar"]
     negative_min = wind["negative_wind_min_mw"]
     values = {
         "feature_stage": "phase2",
@@ -129,6 +131,10 @@ def _schema_metadata(
         "temperature_rolling_policy": (
             "trailing 24h/72h; nulls skipped; full window required"
         ),
+        "calendar_timezone": LOCAL_TIMEZONE,
+        "calendar_holiday_country": HOLIDAY_COUNTRY,
+        "calendar_weekend_hours": str(calendar["weekend_hours"]),
+        "calendar_holiday_hours": str(calendar["holiday_hours"]),
     }
     metadata = dict(existing or {})
     metadata.update({
@@ -159,6 +165,7 @@ def _write_manifest(
     diagnostics = description["diagnostics"]
     wind = diagnostics["wind_ratios"]
     thermal = diagnostics["thermal_demand"]
+    calendar = diagnostics["calendar"]
     manifest = {
         "generated_at_utc": _iso(generated_at),
         "status": "ok",
@@ -199,6 +206,12 @@ def _write_manifest(
                     "skipped within the window; null until a full window of "
                     "history exists"
                 ),
+            },
+            "calendar": {
+                "timezone": LOCAL_TIMEZONE,
+                "holiday_country": HOLIDAY_COUNTRY,
+                "weekend_hours": calendar["weekend_hours"],
+                "holiday_hours": calendar["holiday_hours"],
             },
             "nulls": "propagate; no imputation",
             "rows": "preserve every source row",
@@ -246,6 +259,15 @@ def _print_summary(
         f"{thermal['heating_hours']:,} heating hours "
         f"(max {_format(thermal['max_heating_degree_hours'])} degree-hours "
         f"below {HEATING_BASE_TEMPERATURE_C:g} C)",
+        flush=True,
+    )
+
+    calendar = description["diagnostics"]["calendar"]
+    print(
+        f"calendar  {calendar['weekend_hours']:,} weekend hours; "
+        f"{calendar['holiday_hours']:,} public-holiday hours "
+        f"({calendar['distinct_holidays']} distinct holidays, "
+        f"{LOCAL_TIMEZONE})",
         flush=True,
     )
 

@@ -161,6 +161,7 @@ def test_default_catalog_contains_the_registered_groups():
         "wind_ratios",
         "thermal_demand",
         "interactions",
+        "calendar",
     ]
     assert DEFAULT_CATALOG.feature_names == (
         "wind_penetration_ratio",
@@ -169,4 +170,10 @@ def test_default_catalog_contains_the_registered_groups():
         "temp_rolling_24h",
         "temp_rolling_72h",
         "wind_temp_interaction",
+        "sin_hour",
+        "cos_hour",
+        "sin_month",
+        "cos_month",
+        "is_weekend",
+        "is_fi_public_holiday",
     )

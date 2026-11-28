@@ -7,6 +7,7 @@ from typing import Any
 
 import pyarrow as pa
 
+from fi_energy.features.calendar import CalendarFeatureGroup
 from fi_energy.features.group import FeatureGroup
 from fi_energy.features.interactions import InteractionFeatureGroup
 from fi_energy.features.spec import FeatureSpec
@@ -135,5 +136,6 @@ DEFAULT_CATALOG = FeatureCatalog(
         WindRatiosFeatureGroup(),
         ThermalDemandFeatureGroup(),
         InteractionFeatureGroup(),
+        CalendarFeatureGroup(),
     )
 )

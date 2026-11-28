@@ -1,6 +1,7 @@
 """Feature engineering: derived model inputs from the aligned hourly dataset."""
 
 from fi_energy.features.build import build_feature_table, describe_features
+from fi_energy.features.calendar import CalendarFeatureGroup
 from fi_energy.features.catalog import DEFAULT_CATALOG, FeatureCatalog
 from fi_energy.features.group import FeatureGroup
 from fi_energy.features.interactions import InteractionFeatureGroup
@@ -12,6 +13,7 @@ from fi_energy.features.wind_ratios import WindRatiosFeatureGroup
 
 __all__ = [
     "DEFAULT_CATALOG",
+    "CalendarFeatureGroup",
     "FeatureCatalog",
     "FeatureGroup",
     "FeatureSpec",
