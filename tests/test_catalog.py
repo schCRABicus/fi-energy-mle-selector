@@ -160,6 +160,7 @@ def test_default_catalog_contains_the_registered_groups():
     assert [group.name for group in DEFAULT_CATALOG.groups] == [
         "wind_ratios",
         "thermal_demand",
+        "interactions",
     ]
     assert DEFAULT_CATALOG.feature_names == (
         "wind_penetration_ratio",
@@ -167,4 +168,5 @@ def test_default_catalog_contains_the_registered_groups():
         "heating_degree_hours",
         "temp_rolling_24h",
         "temp_rolling_72h",
+        "wind_temp_interaction",
     )

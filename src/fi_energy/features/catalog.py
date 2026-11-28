@@ -8,6 +8,7 @@ from typing import Any
 import pyarrow as pa
 
 from fi_energy.features.group import FeatureGroup
+from fi_energy.features.interactions import InteractionFeatureGroup
 from fi_energy.features.spec import FeatureSpec
 from fi_energy.features.thermal_demand import ThermalDemandFeatureGroup
 from fi_energy.features.wind_ratios import WindRatiosFeatureGroup
@@ -130,5 +131,9 @@ def _validate_dependencies(
 
 
 DEFAULT_CATALOG = FeatureCatalog(
-    (WindRatiosFeatureGroup(), ThermalDemandFeatureGroup())
+    (
+        WindRatiosFeatureGroup(),
+        ThermalDemandFeatureGroup(),
+        InteractionFeatureGroup(),
+    )
 )

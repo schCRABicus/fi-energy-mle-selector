@@ -13,7 +13,7 @@
 ## Phase 2: Feature Engineering (24-Feature Pipeline)
 - [x] Compute grid ratio features: `wind_penetration_ratio` (`wind_mw / consumption_mw`) and `wind_capacity_factor` (`wind_mw / wind_capacity_mw`).
 - [x] Compute thermal demand features: `heating_degree_hours` ($\max(0, 17^\circ\text{C} - T_{\text{helsinki}})$), `temp_rolling_24h`, and `temp_rolling_72h`.
-- [ ] Compute interaction feature `wind_temp_interaction` (`wind_penetration_ratio * heating_degree_hours`) to isolate cold, windless scarcity hours.
+- [x] Compute interaction feature `wind_temp_interaction` (`wind_penetration_ratio * heating_degree_hours`) to isolate cold, windless scarcity hours.
 - [ ] Compute cyclical time encodings (`sin_hour`, `cos_hour`, `sin_month`, `cos_month`), `is_weekend`, and `is_fi_public_holiday` using the Python `holidays` package (`country='FI'`).
 - [ ] Save the complete 24-feature + target dataset to a clean Parquet/CSV file and verify zero NaNs and zero future-target leakage.
 - [ ] Digitize 6–8 real retail offers from `sahkonhinta.fi` (Fixed, 100% Wind Fixed, Spot, 100% Wind Spot, and Hybrid/*kulutusvaikutus*) into a structured JSON config.
