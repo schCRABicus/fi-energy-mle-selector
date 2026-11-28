@@ -37,10 +37,11 @@ $$\mathcal{L}_{\text{NLL}}(\theta) = \frac{1}{N} \sum_{t=1}^{N} \left( \frac{\bi
 │       │   └── energy_charts/# Energy-Charts client and Nord Pool spot-price fetcher
 │       │       └── data/     # Committed 1-day Parquet snapshots for offline runs
 │       ├── features/         # Phase 2 feature engineering (models/simulator planned)
+│       ├── profiles/         # Standard Finnish household hourly load profiles
 │       └── contracts/        # Retail offer domain model + sahkonhinta.fi adapter
 ├── tests/            # Offline unit tests and live API integration tests
 ├── scripts/          # Reproducible pipelines (Phase 1 pull/refresh, Phase 2 features, dataset & offers)
-├── configs/          # Retail offer catalog (household load profiles planned)
+├── configs/          # Retail offer catalog
 ├── data/             # Hourly datasets, feature tables, and manifests (git-ignored)
 ├── pyproject.toml    # Project metadata, dependencies, packaging, pytest configuration
 ├── uv.lock           # Locked dependency versions
@@ -233,7 +234,8 @@ data/
     │   ├── hourly.parquet        # raw outer join: every window hour
     │   └── hourly_clean.parquet  # short gaps filled, boundary rows trimmed
     ├── features/                 # Phase 2 derived feature table (build_features.py)
-    └── dataset/                  # Phase 2 training dataset (build_dataset.py)
+    ├── dataset/                  # Phase 2 training dataset (build_dataset.py)
+    └── profiles/                 # Household load profiles (build_load_profiles.py)
 ```
 
 The window directory is `3y` for a three-calendar-year window, or the exact hour count such as `24h` for other ranges. Dataset filenames are purpose-based; the manifest keeps the fetcher lineage (e.g. `fingrid_75`) alongside the clear name. `combined/hourly_clean.parquet` is the finalized Phase 1 table: leading and trailing rows where any feature is null are dropped, then interior runs of one or two missing hours (a gap shorter than three hours) are filled by linear interpolation. Longer interior gaps stay null; `manifest.json` records the filled counts, boundary rows removed, and remaining nulls per column.
@@ -325,6 +327,42 @@ The builder uses a strict complete-case policy: any row with a null, NaN, or inf
 - `target_is_next_hour` — the target array equals the spot price shifted one hour, with a null in the final row.
 
 The Parquet file also carries the feature list, target definition, and check results as `fi_energy.*` schema metadata; `manifest.json` adds per-feature null counts, min/mean/max, and the complete-case policy.
+
+#### Household load profiles
+
+[`src/fi_energy/profiles/load_profile.py`](src/fi_energy/profiles/load_profile.py) defines the two standard household profiles used by the Phase 4 contract simulator:
+
+| Key | Label | Annual energy | Household | Hot water | Electric heating |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `apartment_2500` | Apartment, no electric heating | 2,500 kWh | 100% | 0% | 0% |
+| `detached_house_18000` | Electrically heated detached house | 18,000 kWh | 28% | 17% | 56% |
+
+The apartment's metered electricity is household consumption only, because space heating and hot water are supplied by the building. The detached house splits 5,000 kWh of appliances and lighting, 3,000 kWh of electric hot water, and 10,000 kWh of electric space heating.
+
+`scripts/build_load_profiles.py` lays both profiles on the training dataset's hourly grid:
+
+```text
+data/3y/profiles/
+├── hourly_load_profiles.parquet  # timestamp_utc + <key>_hourly_kwh per profile
+├── hourly_load_profiles.csv      # optional CSV copy (--csv)
+└── manifest.json                 # model, component split, annual totals, checks
+```
+
+```bash
+uv run python scripts/build_load_profiles.py
+uv run python scripts/build_load_profiles.py --csv
+uv run python scripts/build_load_profiles.py --input data/3y/dataset/hourly_dataset.parquet \
+    --output data/3y/profiles/hourly_load_profiles.parquet
+```
+
+The model is deliberately simple and documented rather than fitted:
+
+- Household and hot-water load follow local `Europe/Helsinki` wall-clock shapes with a modest morning rise, a pronounced evening peak, and a low overnight base; weekends start later and stay flatter. Household load carries a ±12% seasonal lighting term and hot water ±6%.
+- Space heating is proportional to `max(0, 17 °C − T)` after a six-hour trailing mean of `helsinki_temperature_c`, so the house responds to real weather while the apartment does not. On the 3-year window the house's January mean is 4.0× its July mean; the apartment's ratio is 1.27.
+- Every component is scaled so a fully covered UTC calendar year totals its target kWh; interior gaps from the complete-case dataset are absorbed by scaling up the remaining hours. A partial year at the window edge is scaled in proportion to the hours it contributes (2023 and 2026 in the current build).
+- The builder rejects missing/null temperature values, non-hourly or unsorted timestamps, and any profile whose raw component sums to zero. The returned checks confirm preserved timestamps, no nulls/NaN/infinities, non-negative consumption, and met annual targets.
+
+`profile_table(build, key)` extracts one profile as `timestamp_utc` + `hourly_kwh` for the Phase 4 cost calculators. `profile_annual_totals(build)` reports the realised energy per profile and calendar year. The current build keeps each full year at exactly 2,500 / 18,000 kWh and records every total in `manifest.json`.
 
 #### Retail offer catalog
 
